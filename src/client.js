@@ -23,13 +23,16 @@ class FRPClient {
       console.log('Connected to FRP server');
       this.connected = true;
 
-      // Send control connection handshake
-      this.controlSocket.write(JSON.stringify({
+      // Send control connection handshake with authentication token
+      const handshake = {
         type: 'control_handshake'
-      }) + '\n');
+      };
 
-      this.registerProxies();
-      this.startHeartbeat();
+      if (this.config.token) {
+        handshake.token = this.config.token;
+      }
+
+      this.controlSocket.write(JSON.stringify(handshake) + '\n');
     });
 
     let buffer = '';
@@ -83,6 +86,9 @@ class FRPClient {
 
   handleMessage(msg) {
     switch (msg.type) {
+      case 'auth_response':
+        this.handleAuthResponse(msg);
+        break;
       case 'register_response':
         this.handleRegisterResponse(msg);
         break;
@@ -94,6 +100,17 @@ class FRPClient {
         break;
       default:
         console.log('Unknown message type:', msg.type);
+    }
+  }
+
+  handleAuthResponse(msg) {
+    if (msg.success) {
+      console.log('Authentication successful');
+      this.registerProxies();
+      this.startHeartbeat();
+    } else {
+      console.error('Authentication failed:', msg.error);
+      this.controlSocket.destroy();
     }
   }
 

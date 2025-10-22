@@ -31,6 +31,7 @@ class FRPServer {
     let buffer = '';
     let isControlConnection = false;
     let handshakeComplete = false;
+    let authenticated = false;
 
     const onData = (data) => {
       buffer += data.toString();
@@ -43,7 +44,7 @@ class FRPServer {
         try {
           const msg = JSON.parse(message);
 
-          // Check if this is a control connection or data connection
+          // Check if this is a data connection or data connection
           if (msg.type === 'data_connection') {
             // This is a data connection, not a control connection
             handshakeComplete = true;
@@ -52,13 +53,37 @@ class FRPServer {
             // Emit event for data connection with buffered data
             this.handleIncomingDataConnection(socket, msg, buffer.substring(newlineIndex + 1));
             return;
-          } else {
-            // This is a control connection
+          } else if (msg.type === 'control_handshake') {
+            // This is a control connection - verify authentication
             isControlConnection = true;
+
+            // Check token if configured
+            if (this.config.token) {
+              if (!msg.token || msg.token !== this.config.token) {
+                console.error('Authentication failed: Invalid token from', socket.remoteAddress);
+                socket.write(JSON.stringify({
+                  type: 'auth_response',
+                  success: false,
+                  error: 'Invalid authentication token'
+                }) + '\n');
+                socket.destroy();
+                return;
+              }
+              authenticated = true;
+              console.log('Client authenticated successfully');
+            } else {
+              // No token configured, skip authentication
+              authenticated = true;
+            }
+
             handshakeComplete = true;
 
-            // Process the message
-            this.handleMessage(socket, msg);
+            // Send auth success response
+            socket.write(JSON.stringify({
+              type: 'auth_response',
+              success: true
+            }) + '\n');
+
             buffer = buffer.substring(newlineIndex + 1);
 
             // Continue processing any remaining messages
@@ -69,6 +94,10 @@ class FRPServer {
             socket.on('data', (data) => {
               this.processControlMessages(socket, data.toString());
             });
+          } else {
+            // Unexpected message type during handshake
+            console.error('Invalid handshake: unexpected message type', msg.type);
+            socket.destroy();
           }
         } catch (err) {
           // Invalid JSON, close connection

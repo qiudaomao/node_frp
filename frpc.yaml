@@ -1,5 +1,6 @@
 serverAddr: "192.168.111.8"
 serverPort: 7700
+token: "your_secret_token_here"
 
 proxies:
   - name: "ssh"

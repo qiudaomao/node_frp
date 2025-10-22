@@ -22,6 +22,10 @@ class ConfigLoader {
       throw new Error('serverPort is required');
     }
 
+    if (!config.token) {
+      console.warn('Warning: No authentication token configured. Connection may be rejected by server.');
+    }
+
     if (!config.proxies || config.proxies.length === 0) {
       throw new Error('At least one proxy must be configured');
     }
@@ -55,6 +59,11 @@ class ConfigLoader {
   static validateServerConfig(config) {
     if (!config.bindPort) {
       config.bindPort = 7000;
+    }
+
+    // Token is optional, but if not set, no auth will be performed
+    if (!config.token) {
+      console.warn('Warning: No authentication token configured. Server will accept all connections.');
     }
 
     return config;
