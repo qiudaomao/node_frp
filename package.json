@@ -7,6 +7,7 @@
     "node-frp": "./src/cli.js"
   },
   "scripts": {
+    "web": "node web/app.js",
     "start": "node src/cli.js",
     "server": "node src/cli.js server",
     "client": "node src/cli.js client"
@@ -21,6 +22,11 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
-    "js-yaml": "^4.1.0"
+    "js-yaml": "^4.1.0",
+    "express": "^4.18.2",
+    "express-session": "^1.17.3",
+    "cookie-parser": "^1.4.6",
+    "ejs": "^3.1.9",
+    "morgan": "^1.10.0"
   }
 }

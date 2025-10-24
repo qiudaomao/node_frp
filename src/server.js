@@ -1,4 +1,4 @@
-const net = require('net');
+const net = require("net");
 
 class FRPServer {
   constructor(config) {
@@ -20,24 +20,50 @@ class FRPServer {
       console.log(`FRP Server started on port ${port}`);
     });
 
-    this.controlServer.on('error', (err) => {
-      console.error('Server error:', err);
+    this.controlServer.on("error", (err) => {
+      console.error("Server error:", err);
     });
   }
 
   handleControlConnection(socket) {
-    console.log('New connection from:', socket.remoteAddress);
+    console.log("New connection from:", socket.remoteAddress);
 
-    let buffer = '';
+    let buffer = "";
     let isControlConnection = false;
     let handshakeComplete = false;
     let authenticated = false;
+    let heartbeatTimer = null;
+
+    // Enable TCP keepalive to detect dead connections
+    socket.setKeepAlive(true, 20000); // 20 seconds
+    socket.setTimeout(0); // No timeout on socket itself, we'll use heartbeat
+
+    // Helper to start heartbeat timeout
+    const startHeartbeatTimeout = () => {
+      if (heartbeatTimer) {
+        clearTimeout(heartbeatTimer);
+      }
+      // Expect heartbeat every 20 seconds, timeout after 40 seconds
+      heartbeatTimer = setTimeout(() => {
+        console.log("Client heartbeat timeout, closing connection");
+        this.cleanupClient(socket);
+        socket.destroy();
+      }, 40000); // 40 seconds
+    };
+
+    // Helper to cleanup heartbeat timer
+    const cleanupHeartbeatTimer = () => {
+      if (heartbeatTimer) {
+        clearTimeout(heartbeatTimer);
+        heartbeatTimer = null;
+      }
+    };
 
     const onData = (data) => {
       buffer += data.toString();
 
       // Check for handshake in first message
-      const newlineIndex = buffer.indexOf('\n');
+      const newlineIndex = buffer.indexOf("\n");
       if (newlineIndex !== -1 && !handshakeComplete) {
         const message = buffer.substring(0, newlineIndex);
 
@@ -45,32 +71,41 @@ class FRPServer {
           const msg = JSON.parse(message);
 
           // Check if this is a data connection or data connection
-          if (msg.type === 'data_connection') {
+          if (msg.type === "data_connection") {
             // This is a data connection, not a control connection
             handshakeComplete = true;
-            socket.removeListener('data', onData);
+            socket.removeListener("data", onData);
 
             // Emit event for data connection with buffered data
-            this.handleIncomingDataConnection(socket, msg, buffer.substring(newlineIndex + 1));
+            this.handleIncomingDataConnection(
+              socket,
+              msg,
+              buffer.substring(newlineIndex + 1),
+            );
             return;
-          } else if (msg.type === 'control_handshake') {
+          } else if (msg.type === "control_handshake") {
             // This is a control connection - verify authentication
             isControlConnection = true;
 
             // Check token if configured
             if (this.config.token) {
               if (!msg.token || msg.token !== this.config.token) {
-                console.error('Authentication failed: Invalid token from', socket.remoteAddress);
-                socket.write(JSON.stringify({
-                  type: 'auth_response',
-                  success: false,
-                  error: 'Invalid authentication token'
-                }) + '\n');
+                console.error(
+                  "Authentication failed: Invalid token from",
+                  socket.remoteAddress,
+                );
+                socket.write(
+                  JSON.stringify({
+                    type: "auth_response",
+                    success: false,
+                    error: "Invalid authentication token",
+                  }) + "\n",
+                );
                 socket.destroy();
                 return;
               }
               authenticated = true;
-              console.log('Client authenticated successfully');
+              console.log("Client authenticated successfully");
             } else {
               // No token configured, skip authentication
               authenticated = true;
@@ -79,68 +114,86 @@ class FRPServer {
             handshakeComplete = true;
 
             // Send auth success response
-            socket.write(JSON.stringify({
-              type: 'auth_response',
-              success: true
-            }) + '\n');
+            socket.write(
+              JSON.stringify({
+                type: "auth_response",
+                success: true,
+              }) + "\n",
+            );
+
+            // Start heartbeat monitoring after successful authentication
+            startHeartbeatTimeout();
 
             buffer = buffer.substring(newlineIndex + 1);
 
             // Continue processing any remaining messages
-            this.processControlMessages(socket, buffer);
+            this.processControlMessages(socket, buffer, startHeartbeatTimeout);
 
             // Switch to control message handler
-            socket.removeListener('data', onData);
-            socket.on('data', (data) => {
-              this.processControlMessages(socket, data.toString());
+            socket.removeListener("data", onData);
+            socket.on("data", (data) => {
+              this.processControlMessages(socket, data.toString(), startHeartbeatTimeout);
             });
           } else {
             // Unexpected message type during handshake
-            console.error('Invalid handshake: unexpected message type', msg.type);
+            console.error(
+              "Invalid handshake: unexpected message type",
+              msg.type,
+            );
             socket.destroy();
           }
         } catch (err) {
           // Invalid JSON, close connection
-          console.error('Invalid handshake:', err.message);
+          console.error("Invalid handshake:", err.message);
           socket.destroy();
         }
       }
     };
 
-    socket.on('data', onData);
+    socket.on("data", onData);
 
-    socket.on('end', () => {
+    socket.on("end", () => {
+      cleanupHeartbeatTimer();
       if (isControlConnection) {
-        console.log('Client disconnected');
+        console.log("Client disconnected");
         this.cleanupClient(socket);
       }
     });
 
-    socket.on('error', (err) => {
+    socket.on("error", (err) => {
+      cleanupHeartbeatTimer();
       if (isControlConnection) {
-        console.error('Socket error:', err);
+        console.error("Socket error:", err);
+        this.cleanupClient(socket);
+      }
+    });
+
+    socket.on("close", (hadError) => {
+      cleanupHeartbeatTimer();
+      if (isControlConnection) {
+        console.log(`Socket closed ${hadError ? 'with error' : 'cleanly'}`);
         this.cleanupClient(socket);
       }
     });
   }
 
-  processControlMessages(socket, dataStr) {
+  processControlMessages(socket, dataStr, startHeartbeatTimeout) {
     if (!socket.msgBuffer) {
-      socket.msgBuffer = '';
+      socket.msgBuffer = "";
     }
 
     socket.msgBuffer += dataStr;
 
     let newlineIndex;
-    while ((newlineIndex = socket.msgBuffer.indexOf('\n')) !== -1) {
+    while ((newlineIndex = socket.msgBuffer.indexOf("\n")) !== -1) {
       const message = socket.msgBuffer.substring(0, newlineIndex);
       socket.msgBuffer = socket.msgBuffer.substring(newlineIndex + 1);
 
       try {
         const msg = JSON.parse(message);
-        this.handleMessage(socket, msg);
+        this.handleMessage(socket, msg, startHeartbeatTimeout);
       } catch (err) {
-        console.error('Failed to parse message:', err);
+        console.error("Failed to parse message:", err);
       }
     }
   }
@@ -164,19 +217,19 @@ class FRPServer {
       pendingConn.clientSocket.pipe(socket);
       socket.pipe(pendingConn.clientSocket);
 
-      pendingConn.clientSocket.on('error', () => {
+      pendingConn.clientSocket.on("error", () => {
         socket.destroy();
       });
 
-      socket.on('error', () => {
+      socket.on("error", () => {
         pendingConn.clientSocket.destroy();
       });
 
-      pendingConn.clientSocket.on('end', () => {
+      pendingConn.clientSocket.on("end", () => {
         socket.end();
       });
 
-      socket.on('end', () => {
+      socket.on("end", () => {
         pendingConn.clientSocket.end();
       });
     } else {
@@ -185,16 +238,20 @@ class FRPServer {
     }
   }
 
-  handleMessage(socket, msg) {
+  handleMessage(socket, msg, startHeartbeatTimeout) {
     switch (msg.type) {
-      case 'register':
+      case "register":
         this.registerProxy(socket, msg);
         break;
-      case 'heartbeat':
-        socket.write(JSON.stringify({ type: 'heartbeat_ack' }) + '\n');
+      case "heartbeat":
+        // Reset heartbeat timeout on each heartbeat
+        if (startHeartbeatTimeout) {
+          startHeartbeatTimeout();
+        }
+        socket.write(JSON.stringify({ type: "heartbeat_ack" }) + "\n");
         break;
       default:
-        console.log('Unknown message type:', msg.type);
+        console.log("Unknown message type:", msg.type);
     }
   }
 
@@ -202,11 +259,13 @@ class FRPServer {
     const { name, proxyType, remotePort } = msg;
 
     if (this.proxyServers.has(remotePort)) {
-      socket.write(JSON.stringify({
-        type: 'register_response',
-        success: false,
-        error: `Port ${remotePort} already in use`
-      }) + '\n');
+      socket.write(
+        JSON.stringify({
+          type: "register_response",
+          success: false,
+          error: `Port ${remotePort} already in use`,
+        }) + "\n",
+      );
       return;
     }
 
@@ -221,7 +280,7 @@ class FRPServer {
       this.proxyServers.set(remotePort, {
         server: proxyServer,
         name: name,
-        controlSocket: socket
+        controlSocket: socket,
       });
 
       if (!this.clients.has(socket)) {
@@ -229,20 +288,24 @@ class FRPServer {
       }
       this.clients.get(socket).push(remotePort);
 
-      socket.write(JSON.stringify({
-        type: 'register_response',
-        success: true,
-        name: name
-      }) + '\n');
+      socket.write(
+        JSON.stringify({
+          type: "register_response",
+          success: true,
+          name: name,
+        }) + "\n",
+      );
     });
 
-    proxyServer.on('error', (err) => {
+    proxyServer.on("error", (err) => {
       console.error(`Proxy [${name}] error:`, err);
-      socket.write(JSON.stringify({
-        type: 'register_response',
-        success: false,
-        error: err.message
-      }) + '\n');
+      socket.write(
+        JSON.stringify({
+          type: "register_response",
+          success: false,
+          error: err.message,
+        }) + "\n",
+      );
     });
   }
 
@@ -254,15 +317,17 @@ class FRPServer {
     // Store pending connection
     this.pendingConnections.set(connectionId, {
       clientSocket: clientSocket,
-      proxyName: proxyName
+      proxyName: proxyName,
     });
 
     // Request client to establish a data connection
-    controlSocket.write(JSON.stringify({
-      type: 'new_connection',
-      proxyName: proxyName,
-      connectionId: connectionId
-    }) + '\n');
+    controlSocket.write(
+      JSON.stringify({
+        type: "new_connection",
+        proxyName: proxyName,
+        connectionId: connectionId,
+      }) + "\n",
+    );
 
     // Cleanup on timeout
     setTimeout(() => {
@@ -277,15 +342,28 @@ class FRPServer {
   cleanupClient(socket) {
     const ports = this.clients.get(socket);
     if (ports) {
-      ports.forEach(port => {
+      console.log(`Cleaning up client at ${socket.remoteAddress || 'unknown'}, closing ${ports.length} proxy servers`);
+      ports.forEach((port) => {
         const proxy = this.proxyServers.get(port);
         if (proxy) {
-          proxy.server.close();
+          try {
+            proxy.server.close();
+            console.log(`Closed proxy [${proxy.name}] on port ${port}`);
+          } catch (err) {
+            console.error(`Error closing proxy on port ${port}:`, err);
+          }
           this.proxyServers.delete(port);
-          console.log(`Closed proxy on port ${port}`);
         }
       });
       this.clients.delete(socket);
+    }
+
+    // Clean up any pending connections for this client
+    for (const [connectionId, pending] of this.pendingConnections.entries()) {
+      if (pending.clientSocket && pending.clientSocket.destroyed === false) {
+        pending.clientSocket.destroy();
+      }
+      this.pendingConnections.delete(connectionId);
     }
   }
 
@@ -293,9 +371,28 @@ class FRPServer {
     if (this.controlServer) {
       this.controlServer.close();
     }
-    this.proxyServers.forEach(proxy => {
+    this.proxyServers.forEach((proxy) => {
       proxy.server.close();
     });
+  }
+
+  // Return status of active clients and their forwardings
+  getStatus() {
+    const status = [];
+    for (const [socket, ports] of this.clients.entries()) {
+      const clientInfo = {
+        address: socket.remoteAddress,
+        ports: [],
+      };
+      for (const port of ports) {
+        const proxy = this.proxyServers.get(port);
+        if (proxy) {
+          clientInfo.ports.push({ remotePort: port, name: proxy.name });
+        }
+      }
+      status.push(clientInfo);
+    }
+    return status;
   }
 }
 
