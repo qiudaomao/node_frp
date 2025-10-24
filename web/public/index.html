@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>FRP Server Status</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { border: 1px solid #ddd; padding: 8px; }
+    th { background-color: #f2f2f2; }
+    #loginForm { margin-bottom: 20px; padding: 20px; background: #f9f9f9; border-radius: 5px; }
+    #status { display: none; }
+    .error { color: red; }
+    .success { color: green; }
+  </style>
+</head>
+<body>
+  <h1>FRP Server Status</h1>
+
+  <div id="loginForm">
+    <h3>Login</h3>
+    <label for="tokenInput">Enter API token:</label>
+    <input type="text" id="tokenInput" placeholder="your_secret_token_here" />
+    <button id="loginBtn">Login</button>
+    <div id="loginMessage"></div>
+  </div>
+
+  <div id="status">
+    <button id="logoutBtn">Logout</button>
+    <h3>Active Clients &amp; Port Forwardings</h3>
+    <div id="statusContent">Loading...</div>
+  </div>
+
+  <script>
+    function getStoredToken() {
+      return localStorage.getItem('apiToken') || '';
+    }
+    function setStoredToken(token) {
+      localStorage.setItem('apiToken', token);
+    }
+    function clearStoredToken() {
+      localStorage.removeItem('apiToken');
+    }
+
+    function showLogin() {
+      document.getElementById('loginForm').style.display = 'block';
+      document.getElementById('status').style.display = 'none';
+    }
+
+    function showStatus() {
+      document.getElementById('loginForm').style.display = 'none';
+      document.getElementById('status').style.display = 'block';
+    }
+
+    document.getElementById('loginBtn').addEventListener('click', async () => {
+      const token = document.getElementById('tokenInput').value.trim();
+      if (!token) {
+        document.getElementById('loginMessage').innerHTML = '<p class="error">Please enter a token</p>';
+        return;
+      }
+      const bearerToken = token.startsWith('Bearer ') ? token : 'Bearer ' + token;
+
+      // Test the token
+      try {
+        const resp = await fetch('/api/status', {
+          headers: { 'Authorization': bearerToken }
+        });
+        if (resp.ok) {
+          setStoredToken(bearerToken);
+          document.getElementById('loginMessage').innerHTML = '<p class="success">Login successful!</p>';
+          showStatus();
+          loadStatus();
+        } else {
+          document.getElementById('loginMessage').innerHTML = '<p class="error">Invalid token</p>';
+        }
+      } catch (e) {
+        document.getElementById('loginMessage').innerHTML = '<p class="error">Error: ' + e.message + '</p>';
+      }
+    });
+
+    document.getElementById('logoutBtn').addEventListener('click', () => {
+      clearStoredToken();
+      showLogin();
+      document.getElementById('tokenInput').value = '';
+      document.getElementById('loginMessage').innerHTML = '';
+    });
+
+    async function loadStatus() {
+      const token = getStoredToken();
+      if (!token) {
+        showLogin();
+        return;
+      }
+
+      try {
+        const resp = await fetch('/api/status', {
+          headers: { 'Authorization': token }
+        });
+        if (!resp.ok) {
+          if (resp.status === 401 || resp.status === 403) {
+            clearStoredToken();
+            showLogin();
+            document.getElementById('loginMessage').innerHTML = '<p class="error">Session expired. Please login again.</p>';
+            return;
+          }
+          throw new Error('Network response was not ok');
+        }
+        const data = await resp.json();
+        const container = document.getElementById('statusContent');
+        if (data.clients.length === 0) {
+          container.innerHTML = '<p>No active clients.</p>';
+          return;
+        }
+        let html = '<table><tr><th>Client IP</th><th>Forwardings</th></tr>';
+        data.clients.forEach(c => {
+          const forwards = c.ports.map(p => `${p.name} → ${p.remotePort}`).join(', ');
+          html += `<tr><td>${c.address}</td><td>${forwards || 'None'}</td></tr>`;
+        });
+        html += '</table>';
+        container.innerHTML = html;
+      } catch (e) {
+        document.getElementById('statusContent').innerHTML = `<p class="error">Error loading status: ${e.message}</p>`;
+      }
+    }
+
+    // Auto-load if token already stored
+    if (getStoredToken()) {
+      showStatus();
+      loadStatus();
+    } else {
+      showLogin();
+    }
+
+    // Refresh every 30 seconds if logged in
+    setInterval(() => {
+      if (getStoredToken()) loadStatus();
+    }, 30000);
+  </script>
+</body>
+</html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>FRP Server Status</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { border: 1px solid #ddd; padding: 8px; }
+    th { background-color: #f2f2f2; }
+  </style>
+</head>
+<body>
+  <h1>Active Clients &amp; Port Forwardings</h1>
+  <div id="status">Loading...</div>
+
+  <script>
+    async function loadStatus() {
+      try {
+        const resp = await fetch('/api/status');
+        if (!resp.ok) throw new Error('Network response was not ok');
+        const data = await resp.json();
+        const container = document.getElementById('status');
+        if (data.clients.length === 0) {
+          container.innerHTML = '<p>No active clients.</p>';
+          return;
+        }
+        let html = '<table><tr><th>Client IP</th><th>Forwardings</th></tr>';
+        data.clients.forEach(c => {
+          const forwards = c.ports.map(p => `${p.name} → ${p.remotePort}`).join(', ');
+          html += `<tr><td>${c.address}</td><td>${forwards || 'None'}</td></tr>`;
+        });
+        html += '</table>';
+        container.innerHTML = html;
+      } catch (e) {
+        document.getElementById('status').innerHTML = `<p>Error loading status: ${e.message}</p>`;
+      }
+    }
+    loadStatus();
+    // Refresh every 30 seconds
+    setInterval(loadStatus, 30000);
+  </script>
+</body>
+</html>
