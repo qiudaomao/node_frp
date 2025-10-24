@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Client Details - FRP Admin</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+  <nav class="navbar">
+    <div class="nav-container">
+      <a href="/" class="nav-brand">FRP Admin</a>
+      <ul class="nav-menu">
+        <li><a href="/">Dashboard</a></li>
+        <li><a href="/clients" class="active">Clients</a></li>
+        <li><a href="/port-forwards">Port Forwards</a></li>
+        <li><a href="/logout">Logout</a></li>
+      </ul>
+    </div>
+  </nav>
+
+  <main class="container">
+    <div class="page-header">
+      <h1>Client: <%= client.name %></h1>
+      <div>
+        <a href="/clients/<%= client.id %>/edit" class="btn">Edit</a>
+        <a href="/clients" class="btn">Back</a>
+      </div>
+    </div>
+
+    <div class="detail-card">
+      <h2>Client Information</h2>
+      <dl class="detail-list">
+        <dt>Name</dt>
+        <dd><%= client.name %></dd>
+
+        <dt>Description</dt>
+        <dd><%= client.description || '-' %></dd>
+
+        <dt>Authentication Token</dt>
+        <dd>
+          <code id="token"><%= client.token %></code>
+          <button onclick="copyToken()" class="btn btn-sm">Copy</button>
+        </dd>
+
+        <dt>Status</dt>
+        <dd>
+          <span class="status <%= client.enabled ? 'status-active' : 'status-inactive' %>">
+            <%= client.enabled ? 'Active' : 'Inactive' %>
+          </span>
+        </dd>
+
+        <dt>Created</dt>
+        <dd><%= new Date(client.created_at).toLocaleString() %></dd>
+
+        <dt>Last Updated</dt>
+        <dd><%= new Date(client.updated_at).toLocaleString() %></dd>
+      </dl>
+    </div>
+
+    <div class="detail-card">
+      <div class="section-header">
+        <h2>Port Forwards</h2>
+        <a href="/port-forwards/new?client_id=<%= client.id %>" class="btn btn-primary">Add Port Forward</a>
+      </div>
+
+      <% if (portForwards.length > 0) { %>
+        <div class="table-container">
+          <table>
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Remote Port</th>
+                <th>Local Target</th>
+                <th>Type</th>
+                <th>Status</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              <% portForwards.forEach(function(forward) { %>
+                <tr>
+                  <td><%= forward.name %></td>
+                  <td><%= forward.remote_port %></td>
+                  <td><%= forward.local_ip %>:<%= forward.local_port %></td>
+                  <td><%= forward.proxy_type.toUpperCase() %></td>
+                  <td>
+                    <span class="status <%= forward.enabled ? 'status-active' : 'status-inactive' %>">
+                      <%= forward.enabled ? 'Active' : 'Inactive' %>
+                    </span>
+                  </td>
+                  <td>
+                    <a href="/port-forwards/<%= forward.id %>/edit" class="btn btn-sm">Edit</a>
+                  </td>
+                </tr>
+              <% }); %>
+            </tbody>
+          </table>
+        </div>
+      <% } else { %>
+        <p>No port forwards configured for this client.</p>
+      <% } %>
+    </div>
+  </main>
+
+  <footer class="footer">
+    <p>&copy; 2025 FRP Server Admin Panel</p>
+  </footer>
+
+  <script>
+    function copyToken() {
+      const token = document.getElementById('token').textContent;
+      navigator.clipboard.writeText(token).then(() => {
+        alert('Token copied to clipboard!');
+      });
+    }
+  </script>
+</body>
+</html>

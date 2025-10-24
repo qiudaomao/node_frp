@@ -23,35 +23,13 @@ class ConfigLoader {
     }
 
     if (!config.token) {
-      console.warn('Warning: No authentication token configured. Connection may be rejected by server.');
+      throw new Error('token is required for authentication');
     }
 
-    if (!config.proxies || config.proxies.length === 0) {
-      throw new Error('At least one proxy must be configured');
+    // Proxies are now optional - they come from the server
+    if (config.proxies && config.proxies.length > 0) {
+      console.warn('Warning: proxies defined in client config will be ignored. Port forwards are managed server-side.');
     }
-
-    config.proxies.forEach((proxy, index) => {
-      if (!proxy.name) {
-        throw new Error(`Proxy at index ${index} is missing name`);
-      }
-
-      if (!proxy.localPort) {
-        throw new Error(`Proxy [${proxy.name}] is missing localPort`);
-      }
-
-      if (!proxy.remotePort) {
-        throw new Error(`Proxy [${proxy.name}] is missing remotePort`);
-      }
-
-      // Set defaults
-      if (!proxy.type) {
-        proxy.type = 'tcp';
-      }
-
-      if (!proxy.localIP) {
-        proxy.localIP = '127.0.0.1';
-      }
-    });
 
     return config;
   }
@@ -61,9 +39,32 @@ class ConfigLoader {
       config.bindPort = 7000;
     }
 
-    // Token is optional, but if not set, no auth will be performed
-    if (!config.token) {
-      console.warn('Warning: No authentication token configured. Server will accept all connections.');
+    // Web UI configuration
+    if (!config.webUI) {
+      config.webUI = {};
+    }
+
+    if (typeof config.webUI.enabled === 'undefined') {
+      config.webUI.enabled = true; // Enable by default
+    }
+
+    if (!config.webUI.port) {
+      config.webUI.port = 8080;
+    }
+
+    if (!config.webUI.adminPassword) {
+      config.webUI.adminPassword = 'admin';
+      console.warn('Warning: Using default admin password. Set webUI.adminPassword in config for production.');
+    }
+
+    if (!config.webUI.sessionSecret) {
+      config.webUI.sessionSecret = 'frp-secret-change-me';
+      console.warn('Warning: Using default session secret. Set webUI.sessionSecret in config for production.');
+    }
+
+    // Database path
+    if (!config.databasePath) {
+      config.databasePath = './frp.db';
     }
 
     return config;

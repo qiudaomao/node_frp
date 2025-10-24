@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dashboard - FRP Admin</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+  <nav class="navbar">
+    <div class="nav-container">
+      <a href="/" class="nav-brand">FRP Admin</a>
+      <ul class="nav-menu">
+        <li><a href="/" class="active">Dashboard</a></li>
+        <li><a href="/clients">Clients</a></li>
+        <li><a href="/port-forwards">Port Forwards</a></li>
+        <li><a href="/logout">Logout</a></li>
+      </ul>
+    </div>
+  </nav>
+
+  <main class="container">
+    <h1>Dashboard</h1>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <h3>Active Clients</h3>
+        <div class="stat-number"><%= stats.active_clients %></div>
+        <div class="stat-label">of <%= stats.total_clients %> total</div>
+      </div>
+      <div class="stat-card">
+        <h3>Active Forwards</h3>
+        <div class="stat-number"><%= stats.active_forwards %></div>
+        <div class="stat-label">of <%= stats.total_forwards %> total</div>
+      </div>
+    </div>
+
+    <div class="recent-activity">
+      <h2>System Overview</h2>
+
+      <div class="activity-section">
+        <h3>Recent Clients</h3>
+        <% if (clients.length > 0) { %>
+          <div class="table-container">
+            <table>
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Status</th>
+                  <th>Created</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                <% clients.slice(0, 5).forEach(function(client) { %>
+                  <tr>
+                    <td><%= client.name %></td>
+                    <td>
+                      <span class="status <%= client.enabled ? 'status-active' : 'status-inactive' %>">
+                        <%= client.enabled ? 'Active' : 'Inactive' %>
+                      </span>
+                    </td>
+                    <td><%= new Date(client.created_at).toLocaleDateString() %></td>
+                    <td>
+                      <a href="/clients/<%= client.id %>" class="btn btn-sm">View</a>
+                    </td>
+                  </tr>
+                <% }); %>
+              </tbody>
+            </table>
+          </div>
+        <% } else { %>
+          <p>No clients configured yet.</p>
+        <% } %>
+      </div>
+
+      <div class="activity-section">
+        <h3>Recent Port Forwards</h3>
+        <% if (portForwards.length > 0) { %>
+          <div class="table-container">
+            <table>
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Client</th>
+                  <th>Remote Port</th>
+                  <th>Local Target</th>
+                  <th>Status</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                <% portForwards.slice(0, 5).forEach(function(forward) { %>
+                  <tr>
+                    <td><%= forward.name %></td>
+                    <td><%= forward.client_name %></td>
+                    <td><%= forward.remote_port %></td>
+                    <td><%= forward.local_ip %>:<%= forward.local_port %></td>
+                    <td>
+                      <span class="status <%= forward.enabled ? 'status-active' : 'status-inactive' %>">
+                        <%= forward.enabled ? 'Active' : 'Inactive' %>
+                      </span>
+                    </td>
+                    <td>
+                      <a href="/port-forwards/<%= forward.id %>/edit" class="btn btn-sm">Edit</a>
+                    </td>
+                  </tr>
+                <% }); %>
+              </tbody>
+            </table>
+          </div>
+        <% } else { %>
+          <p>No port forwards configured yet.</p>
+        <% } %>
+      </div>
+    </div>
+
+    <div class="quick-actions">
+      <h2>Quick Actions</h2>
+      <div class="action-buttons">
+        <a href="/clients/new" class="btn btn-primary">Add Client</a>
+        <a href="/port-forwards/new" class="btn btn-primary">Add Port Forward</a>
+      </div>
+    </div>
+  </main>
+
+  <footer class="footer">
+    <p>&copy; 2025 FRP Server Admin Panel</p>
+  </footer>
+</body>
+</html>

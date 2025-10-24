@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title><%= client ? 'Edit Client' : 'New Client' %> - FRP Admin</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+  <nav class="navbar">
+    <div class="nav-container">
+      <a href="/" class="nav-brand">FRP Admin</a>
+      <ul class="nav-menu">
+        <li><a href="/">Dashboard</a></li>
+        <li><a href="/clients" class="active">Clients</a></li>
+        <li><a href="/port-forwards">Port Forwards</a></li>
+        <li><a href="/logout">Logout</a></li>
+      </ul>
+    </div>
+  </nav>
+
+  <main class="container">
+    <div class="page-header">
+      <h1><%= client ? 'Edit Client' : 'New Client' %></h1>
+      <a href="/clients" class="btn">Back to Clients</a>
+    </div>
+
+    <% if (error) { %>
+      <div class="error-message"><%= error %></div>
+    <% } %>
+
+    <form method="POST" action="<%= client ? `/clients/${client.id}/edit` : '/clients/new' %>" class="form-card">
+      <div class="form-group">
+        <label for="name">Client Name *</label>
+        <input type="text" id="name" name="name" value="<%= client ? client.name : '' %>" required>
+      </div>
+
+      <div class="form-group">
+        <label for="description">Description</label>
+        <textarea id="description" name="description" rows="3"><%= client ? client.description || '' : '' %></textarea>
+      </div>
+
+      <% if (client) { %>
+        <div class="form-group">
+          <label for="token">Authentication Token</label>
+          <input type="text" id="token" name="token" value="<%= client.token %>" readonly>
+          <small class="form-help">This token cannot be changed. Copy it to configure your client.</small>
+        </div>
+
+        <div class="form-group">
+          <label class="checkbox-label">
+            <input type="checkbox" name="enabled" <%= client.enabled ? 'checked' : '' %>>
+            Enable this client
+          </label>
+        </div>
+      <% } %>
+
+      <div class="form-actions">
+        <button type="submit" class="btn btn-primary"><%= client ? 'Update Client' : 'Create Client' %></button>
+        <a href="/clients" class="btn">Cancel</a>
+      </div>
+    </form>
+
+    <% if (!client) { %>
+      <div class="info-box">
+        <h3>Note:</h3>
+        <p>After creating the client, you will receive a unique authentication token. Make sure to copy it - you'll need it to configure your FRP client.</p>
+      </div>
+    <% } %>
+  </main>
+
+  <footer class="footer">
+    <p>&copy; 2025 FRP Server Admin Panel</p>
+  </footer>
+</body>
+</html>

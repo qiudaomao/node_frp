@@ -1,2 +1,11 @@
 bindPort: 7700
-token: "your_secret_token_here"
+
+# Database path
+databasePath: ./frp.db
+
+# Web UI Configuration
+webUI:
+  enabled: true
+  port: 8080
+  adminPassword: admin
+  sessionSecret: frp-secret-change-me-in-production

@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title><%= portForward ? 'Edit Port Forward' : 'New Port Forward' %> - FRP Admin</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+  <nav class="navbar">
+    <div class="nav-container">
+      <a href="/" class="nav-brand">FRP Admin</a>
+      <ul class="nav-menu">
+        <li><a href="/">Dashboard</a></li>
+        <li><a href="/clients">Clients</a></li>
+        <li><a href="/port-forwards" class="active">Port Forwards</a></li>
+        <li><a href="/logout">Logout</a></li>
+      </ul>
+    </div>
+  </nav>
+
+  <main class="container">
+    <div class="page-header">
+      <h1><%= portForward ? 'Edit Port Forward' : 'New Port Forward' %></h1>
+      <a href="/port-forwards" class="btn">Back to Port Forwards</a>
+    </div>
+
+    <% if (error) { %>
+      <div class="error-message"><%= error %></div>
+    <% } %>
+
+    <form method="POST" action="<%= portForward ? `/port-forwards/${portForward.id}/edit` : '/port-forwards/new' %>" class="form-card">
+      <div class="form-group">
+        <label for="name">Forward Name *</label>
+        <input type="text" id="name" name="name" value="<%= portForward ? portForward.name : '' %>" required>
+      </div>
+
+      <div class="form-group">
+        <label for="client_id">Client *</label>
+        <select id="client_id" name="client_id" required>
+          <option value="">Select a client</option>
+          <% clients.forEach(function(client) { %>
+            <option value="<%= client.id %>" <%= (portForward && portForward.client_id == client.id) ? 'selected' : '' %>>
+              <%= client.name %>
+            </option>
+          <% }); %>
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label for="remote_port">Remote Port *</label>
+        <input type="number" id="remote_port" name="remote_port" value="<%= portForward ? portForward.remote_port : '' %>" min="1" max="65535" required>
+        <small class="form-help">The external port that will be listened on by the server</small>
+      </div>
+
+      <div class="form-group">
+        <label for="local_ip">Local IP</label>
+        <input type="text" id="local_ip" name="local_ip" value="<%= portForward ? portForward.local_ip : '127.0.0.1' %>" placeholder="127.0.0.1">
+        <small class="form-help">The IP address of the target service on the client machine</small>
+      </div>
+
+      <div class="form-group">
+        <label for="local_port">Local Port *</label>
+        <input type="number" id="local_port" name="local_port" value="<%= portForward ? portForward.local_port : '' %>" min="1" max="65535" required>
+        <small class="form-help">The port of the target service on the client machine</small>
+      </div>
+
+      <div class="form-group">
+        <label for="proxy_type">Proxy Type</label>
+        <select id="proxy_type" name="proxy_type">
+          <option value="tcp" <%= (!portForward || portForward.proxy_type === 'tcp') ? 'selected' : '' %>>TCP</option>
+        </select>
+        <small class="form-help">Type of proxy (currently only TCP is supported)</small>
+      </div>
+
+      <% if (portForward) { %>
+        <div class="form-group">
+          <label class="checkbox-label">
+            <input type="checkbox" name="enabled" <%= portForward.enabled ? 'checked' : '' %>>
+            Enable this port forward
+          </label>
+        </div>
+      <% } %>
+
+      <div class="form-actions">
+        <button type="submit" class="btn btn-primary"><%= portForward ? 'Update Port Forward' : 'Create Port Forward' %></button>
+        <a href="/port-forwards" class="btn">Cancel</a>
+      </div>
+    </form>
+  </main>
+
+  <footer class="footer">
+    <p>&copy; 2025 FRP Server Admin Panel</p>
+  </footer>
+</body>
+</html>

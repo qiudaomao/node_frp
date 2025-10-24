@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Port Forwards - FRP Admin</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+  <nav class="navbar">
+    <div class="nav-container">
+      <a href="/" class="nav-brand">FRP Admin</a>
+      <ul class="nav-menu">
+        <li><a href="/">Dashboard</a></li>
+        <li><a href="/clients">Clients</a></li>
+        <li><a href="/port-forwards" class="active">Port Forwards</a></li>
+        <li><a href="/logout">Logout</a></li>
+      </ul>
+    </div>
+  </nav>
+
+  <main class="container">
+    <div class="page-header">
+      <h1>Port Forwards</h1>
+      <a href="/port-forwards/new" class="btn btn-primary">Add Port Forward</a>
+    </div>
+
+    <% if (portForwards.length > 0) { %>
+      <div class="table-container">
+        <table>
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Client</th>
+              <th>Remote Port</th>
+              <th>Local Target</th>
+              <th>Type</th>
+              <th>Status</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            <% portForwards.forEach(function(forward) { %>
+              <tr>
+                <td><%= forward.name %></td>
+                <td><%= forward.client_name %></td>
+                <td><%= forward.remote_port %></td>
+                <td><%= forward.local_ip %>:<%= forward.local_port %></td>
+                <td><%= forward.proxy_type.toUpperCase() %></td>
+                <td>
+                  <span class="status <%= forward.enabled ? 'status-active' : 'status-inactive' %>">
+                    <%= forward.enabled ? 'Active' : 'Inactive' %>
+                  </span>
+                </td>
+                <td>
+                  <a href="/port-forwards/<%= forward.id %>/edit" class="btn btn-sm">Edit</a>
+                  <button class="btn btn-sm btn-danger" onclick="deletePortForward(<%= forward.id %>, '<%= forward.name %>')">Delete</button>
+                </td>
+              </tr>
+            <% }); %>
+          </tbody>
+        </table>
+      </div>
+    <% } else { %>
+      <div class="empty-state">
+        <h3>No port forwards configured</h3>
+        <p>Create a port forward to start proxying traffic through your FRP clients.</p>
+        <a href="/port-forwards/new" class="btn btn-primary">Add Port Forward</a>
+      </div>
+    <% } %>
+  </main>
+
+  <script>
+    async function deletePortForward(id, name) {
+      if (confirm(`Are you sure you want to delete port forward "${name}"?`)) {
+        try {
+          const response = await fetch(`/api/port-forwards/${id}`, {
+            method: 'DELETE',
+            headers: {
+              'Content-Type': 'application/json'
+            }
+          });
+
+          if (response.ok) {
+            window.location.reload();
+          } else {
+            const error = await response.json();
+            alert('Failed to delete port forward: ' + error.error);
+          }
+        } catch (err) {
+          alert('Error deleting port forward: ' + err.message);
+        }
+      }
+    }
+  </script>
+
+  <footer class="footer">
+    <p>&copy; 2025 FRP Server Admin Panel</p>
+  </footer>
+</body>
+</html>

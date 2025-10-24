@@ -1,17 +1,32 @@
 const net = require("net");
+const Database = require('./database');
+const WebUIServer = require('./webui');
 
 class FRPServer {
   constructor(config) {
     this.config = config;
     this.controlServer = null;
+    this.webUI = null;
     this.proxyServers = new Map();
-    this.clients = new Map();
+    this.clients = new Map(); // Maps socket -> [ports]
+    this.clientSockets = new Map(); // Maps clientId -> socket
     this.pendingConnections = new Map();
+    this.database = new Database(config.databasePath || './frp.db');
   }
 
-  start() {
+  async start() {
     const port = this.config.bindPort || 7000;
 
+    // Initialize database
+    try {
+      await this.database.initialize();
+      console.log('Database initialized successfully');
+    } catch (err) {
+      console.error('Failed to initialize database:', err);
+      process.exit(1);
+    }
+
+    // Start FRP control server
     this.controlServer = net.createServer((socket) => {
       this.handleControlConnection(socket);
     });
@@ -23,6 +38,19 @@ class FRPServer {
     this.controlServer.on("error", (err) => {
       console.error("Server error:", err);
     });
+
+    // Start Web UI if enabled
+    if (this.config.webUI && this.config.webUI.enabled) {
+      try {
+        this.webUI = new WebUIServer(this.config, this.database, this);
+        await this.webUI.start();
+      } catch (err) {
+        console.error('Failed to start Web UI:', err);
+        console.log('FRP Server will continue without Web UI');
+      }
+    } else {
+      console.log('Web UI is disabled');
+    }
   }
 
   handleControlConnection(socket) {
@@ -59,7 +87,7 @@ class FRPServer {
       }
     };
 
-    const onData = (data) => {
+    const onData = async (data) => {
       buffer += data.toString();
 
       // Check for handshake in first message
@@ -87,37 +115,78 @@ class FRPServer {
             // This is a control connection - verify authentication
             isControlConnection = true;
 
-            // Check token if configured
-            if (this.config.token) {
-              if (!msg.token || msg.token !== this.config.token) {
-                console.error(
-                  "Authentication failed: Invalid token from",
-                  socket.remoteAddress,
-                );
+            // Check token against database
+            if (msg.token) {
+              try {
+                const client = await this.database.getClientByToken(msg.token);
+                if (client) {
+                  authenticated = true;
+                  console.log(`Client [${client.name}] authenticated successfully`);
+                  // Store client info on socket for later use
+                  socket.clientId = client.id;
+                  socket.clientName = client.name;
+                  // Track socket by client ID for dynamic updates
+                  this.clientSockets.set(client.id, socket);
+                } else {
+                  console.error("Authentication failed: Invalid token from", socket.remoteAddress);
+                  socket.write(
+                    JSON.stringify({
+                      type: "auth_response",
+                      success: false,
+                      error: "Invalid authentication token",
+                    }) + "\n",
+                  );
+                  socket.destroy();
+                  return;
+                }
+              } catch (err) {
+                console.error("Database error during authentication:", err);
                 socket.write(
                   JSON.stringify({
                     type: "auth_response",
                     success: false,
-                    error: "Invalid authentication token",
+                    error: "Authentication failed due to server error",
                   }) + "\n",
                 );
                 socket.destroy();
                 return;
               }
-              authenticated = true;
-              console.log("Client authenticated successfully");
             } else {
-              // No token configured, skip authentication
-              authenticated = true;
+              console.error("Authentication failed: No token provided from", socket.remoteAddress);
+              socket.write(
+                JSON.stringify({
+                  type: "auth_response",
+                  success: false,
+                  error: "Authentication token is required",
+                }) + "\n",
+              );
+              socket.destroy();
+              return;
             }
 
             handshakeComplete = true;
 
-            // Send auth success response
+            // Get port forwards for this client from database
+            let portForwards = [];
+            try {
+              const forwards = await this.database.getPortForwardsByClient(socket.clientId);
+              portForwards = forwards.map(f => ({
+                name: f.name,
+                remotePort: f.remote_port,
+                localIp: f.local_ip,
+                localPort: f.local_port,
+                proxyType: f.proxy_type
+              }));
+            } catch (err) {
+              console.error("Failed to load port forwards:", err);
+            }
+
+            // Send auth success response with port forward assignments
             socket.write(
               JSON.stringify({
                 type: "auth_response",
                 success: true,
+                portForwards: portForwards
               }) + "\n",
             );
 
@@ -128,6 +197,9 @@ class FRPServer {
 
             // Continue processing any remaining messages
             this.processControlMessages(socket, buffer, startHeartbeatTimeout);
+
+            // Create proxy servers for this client automatically
+            await this.createClientProxies(socket);
 
             // Switch to control message handler
             socket.removeListener("data", onData);
@@ -241,7 +313,14 @@ class FRPServer {
   handleMessage(socket, msg, startHeartbeatTimeout) {
     switch (msg.type) {
       case "register":
-        this.registerProxy(socket, msg);
+        // No longer needed - proxies are created automatically from database
+        socket.write(
+          JSON.stringify({
+            type: "register_response",
+            success: false,
+            error: "Port forwards are now managed server-side via database"
+          }) + "\n"
+        );
         break;
       case "heartbeat":
         // Reset heartbeat timeout on each heartbeat
@@ -255,57 +334,61 @@ class FRPServer {
     }
   }
 
-  registerProxy(socket, msg) {
-    const { name, proxyType, remotePort } = msg;
+  async createClientProxies(socket) {
+    if (!socket.clientId) {
+      console.error('Cannot create proxies: client ID not set');
+      return;
+    }
 
+    try {
+      const portForwards = await this.database.getPortForwardsByClient(socket.clientId);
+
+      for (const forward of portForwards) {
+        await this.createProxyServer(socket, {
+          name: forward.name,
+          remotePort: forward.remote_port,
+          proxyType: forward.proxy_type
+        });
+      }
+    } catch (err) {
+      console.error('Failed to create client proxies:', err);
+    }
+  }
+
+  async createProxyServer(controlSocket, { name, remotePort, proxyType }) {
+    // Check if port is already in use
     if (this.proxyServers.has(remotePort)) {
-      socket.write(
-        JSON.stringify({
-          type: "register_response",
-          success: false,
-          error: `Port ${remotePort} already in use`,
-        }) + "\n",
-      );
+      console.error(`Port ${remotePort} already in use`);
       return;
     }
 
     // Create proxy server for this remote port
     const proxyServer = net.createServer((clientSocket) => {
-      this.handleProxyConnection(socket, clientSocket, name);
+      this.handleProxyConnection(controlSocket, clientSocket, name);
     });
 
-    proxyServer.listen(remotePort, () => {
-      console.log(`Proxy [${name}] listening on port ${remotePort}`);
+    return new Promise((resolve, reject) => {
+      proxyServer.listen(remotePort, () => {
+        console.log(`Proxy [${name}] listening on port ${remotePort}`);
 
-      this.proxyServers.set(remotePort, {
-        server: proxyServer,
-        name: name,
-        controlSocket: socket,
+        this.proxyServers.set(remotePort, {
+          server: proxyServer,
+          name: name,
+          controlSocket: controlSocket,
+        });
+
+        if (!this.clients.has(controlSocket)) {
+          this.clients.set(controlSocket, []);
+        }
+        this.clients.get(controlSocket).push(remotePort);
+
+        resolve();
       });
 
-      if (!this.clients.has(socket)) {
-        this.clients.set(socket, []);
-      }
-      this.clients.get(socket).push(remotePort);
-
-      socket.write(
-        JSON.stringify({
-          type: "register_response",
-          success: true,
-          name: name,
-        }) + "\n",
-      );
-    });
-
-    proxyServer.on("error", (err) => {
-      console.error(`Proxy [${name}] error:`, err);
-      socket.write(
-        JSON.stringify({
-          type: "register_response",
-          success: false,
-          error: err.message,
-        }) + "\n",
-      );
+      proxyServer.on("error", (err) => {
+        console.error(`Proxy [${name}] error:`, err);
+        reject(err);
+      });
     });
   }
 
@@ -358,6 +441,11 @@ class FRPServer {
       this.clients.delete(socket);
     }
 
+    // Remove from clientSockets tracking
+    if (socket.clientId) {
+      this.clientSockets.delete(socket.clientId);
+    }
+
     // Clean up any pending connections for this client
     for (const [connectionId, pending] of this.pendingConnections.entries()) {
       if (pending.clientSocket && pending.clientSocket.destroyed === false) {
@@ -374,6 +462,88 @@ class FRPServer {
     this.proxyServers.forEach((proxy) => {
       proxy.server.close();
     });
+    if (this.webUI) {
+      this.webUI.stop();
+    }
+  }
+
+  // Reload port forwards for a specific client
+  async reloadClientPortForwards(clientId) {
+    const socket = this.clientSockets.get(clientId);
+    if (!socket || socket.destroyed) {
+      console.log(`Client ${clientId} not connected, skipping reload`);
+      return;
+    }
+
+    try {
+      console.log(`Reloading port forwards for client ${socket.clientName} (ID: ${clientId})`);
+
+      // Get current port forwards from database
+      const newForwards = await this.database.getPortForwardsByClient(clientId);
+      const currentPorts = this.clients.get(socket) || [];
+
+      // Find ports to remove (no longer in database)
+      const newPortSet = new Set(newForwards.map(f => f.remote_port));
+      const portsToRemove = currentPorts.filter(port => !newPortSet.has(port));
+
+      // Close removed proxy servers
+      for (const port of portsToRemove) {
+        const proxy = this.proxyServers.get(port);
+        if (proxy && proxy.controlSocket === socket) {
+          try {
+            proxy.server.close();
+            this.proxyServers.delete(port);
+            console.log(`Removed proxy [${proxy.name}] on port ${port}`);
+          } catch (err) {
+            console.error(`Error closing proxy on port ${port}:`, err);
+          }
+        }
+      }
+
+      // Update the client's port list
+      const remainingPorts = currentPorts.filter(port => newPortSet.has(port));
+      this.clients.set(socket, remainingPorts);
+
+      // Create new proxy servers
+      for (const forward of newForwards) {
+        if (!this.proxyServers.has(forward.remote_port)) {
+          try {
+            await this.createProxyServer(socket, {
+              name: forward.name,
+              remotePort: forward.remote_port,
+              proxyType: forward.proxy_type
+            });
+          } catch (err) {
+            console.error(`Failed to create proxy [${forward.name}]:`, err);
+          }
+        }
+      }
+
+      // Send updated port forward list to client
+      const portForwards = newForwards.map(f => ({
+        name: f.name,
+        remotePort: f.remote_port,
+        localIp: f.local_ip,
+        localPort: f.local_port,
+        proxyType: f.proxy_type
+      }));
+
+      socket.write(
+        JSON.stringify({
+          type: "config_update",
+          portForwards: portForwards
+        }) + "\n"
+      );
+
+      console.log(`Successfully reloaded ${newForwards.length} port forwards for client ${socket.clientName}`);
+    } catch (err) {
+      console.error(`Error reloading port forwards for client ${clientId}:`, err);
+    }
+  }
+
+  // Get reference to server instance for web UI integration
+  getDatabase() {
+    return this.database;
   }
 
   // Return status of active clients and their forwardings

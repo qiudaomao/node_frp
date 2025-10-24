@@ -1,16 +1,3 @@
 serverAddr: "192.168.111.8"
 serverPort: 7700
-token: "your_secret_token_here"
-
-proxies:
-  - name: "ssh"
-    type: "tcp"
-    localIP: "10.233.43.72"
-    localPort: 22
-    remotePort: 6622
-
-  - name: "web"
-    type: "tcp"
-    localIP: "127.0.0.1"
-    localPort: 8080
-    remotePort: 8080
+token: "452d9012f49de0bcea362f2fda06c51b3aa5dd226f8cc65f03c259a5e23bd155"

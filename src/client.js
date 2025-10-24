@@ -7,6 +7,7 @@ class FRPClient {
     this.reconnectTimer = null;
     this.heartbeatTimer = null;
     this.connected = false;
+    this.assignedProxies = []; // Store port forwards assigned by server
   }
 
   start() {
@@ -95,6 +96,9 @@ class FRPClient {
       case 'new_connection':
         this.handleNewConnection(msg);
         break;
+      case 'config_update':
+        this.handleConfigUpdate(msg);
+        break;
       case 'heartbeat_ack':
         // Heartbeat acknowledged
         break;
@@ -106,7 +110,16 @@ class FRPClient {
   handleAuthResponse(msg) {
     if (msg.success) {
       console.log('Authentication successful');
-      this.registerProxies();
+
+      // Handle port forward assignments from server
+      if (msg.portForwards && Array.isArray(msg.portForwards)) {
+        this.assignedProxies = msg.portForwards;
+        console.log(`Server assigned ${this.assignedProxies.length} port forwards:`);
+        this.assignedProxies.forEach(proxy => {
+          console.log(`  - ${proxy.name}: ${proxy.localIp}:${proxy.localPort} -> localhost:${proxy.remotePort} (${proxy.proxyType})`);
+        });
+      }
+
       this.startHeartbeat();
     } else {
       console.error('Authentication failed:', msg.error);
@@ -122,12 +135,35 @@ class FRPClient {
     }
   }
 
+  handleConfigUpdate(msg) {
+    if (msg.portForwards && Array.isArray(msg.portForwards)) {
+      const oldProxies = this.assignedProxies.length;
+      this.assignedProxies = msg.portForwards;
+
+      console.log(`Configuration updated! Server assigned ${this.assignedProxies.length} port forwards:`);
+      this.assignedProxies.forEach(proxy => {
+        console.log(`  - ${proxy.name}: ${proxy.localIp}:${proxy.localPort} -> localhost:${proxy.remotePort} (${proxy.proxyType})`);
+      });
+
+      if (this.assignedProxies.length > oldProxies) {
+        console.log(`✓ ${this.assignedProxies.length - oldProxies} new port forward(s) activated`);
+      } else if (this.assignedProxies.length < oldProxies) {
+        console.log(`✓ ${oldProxies - this.assignedProxies.length} port forward(s) removed`);
+      } else {
+        console.log(`✓ Port forward configuration updated`);
+      }
+    } else {
+      console.error('Received config_update without portForwards data');
+    }
+  }
+
   handleNewConnection(msg) {
     const { proxyName, connectionId } = msg;
 
-    const proxy = this.config.proxies.find(p => p.name === proxyName);
+    // Find proxy in assigned proxies from server
+    const proxy = this.assignedProxies.find(p => p.name === proxyName);
     if (!proxy) {
-      console.error(`Proxy [${proxyName}] not found`);
+      console.error(`Proxy [${proxyName}] not found in assigned port forwards`);
       return;
     }
 
@@ -144,12 +180,12 @@ class FRPClient {
           connectionId: connectionId
         }) + '\n');
 
-        // Connect to local service
+        // Connect to local service using assigned proxy configuration
         const localSocket = net.createConnection(
           proxy.localPort,
-          proxy.localIP || '127.0.0.1',
+          proxy.localIp || '127.0.0.1',
           () => {
-            console.log(`Connected to local service ${proxy.localIP}:${proxy.localPort}`);
+            console.log(`Connected to local service ${proxy.localIp}:${proxy.localPort}`);
 
             // Pipe data between server and local service
             dataSocket.pipe(localSocket);

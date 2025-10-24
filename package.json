@@ -7,7 +7,6 @@
     "node-frp": "./src/cli.js"
   },
   "scripts": {
-    "web": "node web/app.js",
     "start": "node src/cli.js",
     "server": "node src/cli.js server",
     "client": "node src/cli.js client"
@@ -27,6 +26,9 @@
     "express-session": "^1.17.3",
     "cookie-parser": "^1.4.6",
     "ejs": "^3.1.9",
-    "morgan": "^1.10.0"
+    "morgan": "^1.10.0",
+    "sqlite3": "^5.1.6",
+    "express-rate-limit": "^7.1.5",
+    "body-parser": "^1.20.2"
   }
 }

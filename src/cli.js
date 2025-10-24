@@ -7,7 +7,7 @@ const args = process.argv.slice(2);
 function printUsage() {
   console.log(`
 Usage:
-  node-frp server [config_file]    Start FRP server
+  node-frp server [config_file]    Start FRP server (includes web UI)
   node-frp client [config_file]    Start FRP client
 
 Default config files:
@@ -19,6 +19,10 @@ Examples:
   node-frp client                  Start client with default config
   node-frp server custom.yaml      Start server with custom config
   node-frp client custom.yaml      Start client with custom config
+
+Web UI:
+  The web UI is automatically started with the server if enabled in config.
+  Access it via browser at http://localhost:<webUI.port> (default: 8080)
   `);
 }
 
