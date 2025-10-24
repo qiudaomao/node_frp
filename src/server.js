@@ -455,6 +455,17 @@ class FRPServer {
     }
   }
 
+  // Get list of connected client IDs
+  getConnectedClientIds() {
+    const connectedIds = [];
+    for (const [clientId, socket] of this.clientSockets.entries()) {
+      if (socket && !socket.destroyed) {
+        connectedIds.push(clientId);
+      }
+    }
+    return connectedIds;
+  }
+
   stop() {
     if (this.controlServer) {
       this.controlServer.close();

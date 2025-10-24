@@ -100,7 +100,21 @@ class WebUIServer {
         const stats = await db.getStatistics();
         const clients = await db.getAllClients();
         const portForwards = await db.getAllPortForwards();
-        res.render('dashboard', { stats, clients, portForwards });
+        const connectedClientIds = this.frpServer ? this.frpServer.getConnectedClientIds() : [];
+
+        // Add connection status to clients and port forwards
+        const clientsWithStatus = clients.map(c => ({
+          ...c,
+          connected: connectedClientIds.includes(c.id)
+        }));
+
+        const portForwardsWithStatus = portForwards.map(pf => ({
+          ...pf,
+          client_connected: connectedClientIds.includes(pf.client_id),
+          active: pf.enabled && connectedClientIds.includes(pf.client_id)
+        }));
+
+        res.render('dashboard', { stats, clients: clientsWithStatus, portForwards: portForwardsWithStatus });
       } catch (err) {
         console.error('Dashboard error:', err);
         res.status(500).send('Internal server error');
@@ -179,7 +193,16 @@ class WebUIServer {
     this.app.get('/port-forwards', requireAuth, async (req, res) => {
       try {
         const portForwards = await db.getAllPortForwards();
-        res.render('port-forwards', { portForwards });
+        const connectedClientIds = this.frpServer ? this.frpServer.getConnectedClientIds() : [];
+
+        // Add connection status to each port forward
+        const portForwardsWithStatus = portForwards.map(pf => ({
+          ...pf,
+          client_connected: connectedClientIds.includes(pf.client_id),
+          active: pf.enabled && connectedClientIds.includes(pf.client_id)
+        }));
+
+        res.render('port-forwards', { portForwards: portForwardsWithStatus });
       } catch (err) {
         console.error('Error loading port forwards:', err);
         res.status(500).send('Internal server error');
@@ -320,7 +343,16 @@ class WebUIServer {
     this.app.get('/api/port-forwards', requireAuth, async (req, res) => {
       try {
         const portForwards = await db.getAllPortForwards();
-        res.json(portForwards);
+        const connectedClientIds = this.frpServer ? this.frpServer.getConnectedClientIds() : [];
+
+        // Add connection status to each port forward
+        const portForwardsWithStatus = portForwards.map(pf => ({
+          ...pf,
+          client_connected: connectedClientIds.includes(pf.client_id),
+          active: pf.enabled && connectedClientIds.includes(pf.client_id)
+        }));
+
+        res.json(portForwardsWithStatus);
       } catch (err) {
         res.status(500).json({ error: err.message });
       }
@@ -373,6 +405,27 @@ class WebUIServer {
           await reloadClientPortForwards(currentPortForward.client_id);
         }
         res.json(portForward);
+      } catch (err) {
+        res.status(400).json({ error: err.message });
+      }
+    });
+
+    this.app.put('/api/port-forwards/:id/toggle', requireAuth, async (req, res) => {
+      try {
+        const portForward = await db.getPortForward(req.params.id);
+        if (!portForward) return res.status(404).json({ error: 'Port forward not found' });
+
+        // Toggle the enabled status
+        const newStatus = portForward.enabled ? 0 : 1;
+        await db.updatePortForward(req.params.id, { enabled: newStatus });
+
+        // Reload client configuration if client is connected
+        if (portForward) {
+          await reloadClientPortForwards(portForward.client_id);
+        }
+
+        const updatedPortForward = await db.getPortForward(req.params.id);
+        res.json(updatedPortForward);
       } catch (err) {
         res.status(400).json({ error: err.message });
       }

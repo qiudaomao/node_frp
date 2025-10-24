@@ -56,8 +56,8 @@
                   <tr>
                     <td><%= client.name %></td>
                     <td>
-                      <span class="status <%= client.enabled ? 'status-active' : 'status-inactive' %>">
-                        <%= client.enabled ? 'Active' : 'Inactive' %>
+                      <span class="status <%= client.connected ? 'status-active' : 'status-inactive' %>">
+                        <%= client.connected ? 'Connected' : 'Offline' %>
                       </span>
                     </td>
                     <td><%= new Date(client.created_at).toLocaleDateString() %></td>
@@ -97,8 +97,8 @@
                     <td><%= forward.remote_port %></td>
                     <td><%= forward.local_ip %>:<%= forward.local_port %></td>
                     <td>
-                      <span class="status <%= forward.enabled ? 'status-active' : 'status-inactive' %>">
-                        <%= forward.enabled ? 'Active' : 'Inactive' %>
+                      <span class="status <%= forward.active ? 'status-active' : 'status-inactive' %>">
+                        <%= forward.active ? 'Active' : (forward.enabled ? 'Client Offline' : 'Disabled') %>
                       </span>
                     </td>
                     <td>
