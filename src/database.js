@@ -56,6 +56,18 @@ class Database {
       CREATE INDEX IF NOT EXISTS idx_clients_token ON clients(token);
       CREATE INDEX IF NOT EXISTS idx_port_forwards_client ON port_forwards(client_id);
       CREATE INDEX IF NOT EXISTS idx_port_forwards_remote_port ON port_forwards(remote_port);
+
+      CREATE TABLE IF NOT EXISTS traffic_stats (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        port_forward_id INTEGER NOT NULL,
+        bytes_in INTEGER NOT NULL DEFAULT 0,
+        bytes_out INTEGER NOT NULL DEFAULT 0,
+        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (port_forward_id) REFERENCES port_forwards(id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_traffic_stats_port_forward ON traffic_stats(port_forward_id);
+      CREATE INDEX IF NOT EXISTS idx_traffic_stats_timestamp ON traffic_stats(timestamp);
     `;
 
     return new Promise((resolve, reject) => {
@@ -318,6 +330,73 @@ class Database {
       this.db.get(sql, [], (err, row) => {
         if (err) reject(err);
         else resolve(row);
+      });
+    });
+  }
+
+  // Traffic statistics methods
+  async updatePortForwardTraffic(portForwardId, bytesIn, bytesOut) {
+    const sql = `
+      INSERT INTO traffic_stats (port_forward_id, bytes_in, bytes_out, timestamp)
+      VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+    `;
+
+    return new Promise((resolve, reject) => {
+      this.db.run(sql, [portForwardId, bytesIn, bytesOut], function(err) {
+        if (err) reject(err);
+        else resolve({ id: this.lastID });
+      });
+    });
+  }
+
+  async getPortForwardTraffic(portForwardId, since = null) {
+    let sql = `
+      SELECT
+        SUM(bytes_in) as total_bytes_in,
+        SUM(bytes_out) as total_bytes_out,
+        SUM(bytes_in + bytes_out) as total_bytes,
+        COUNT(*) as record_count,
+        MAX(timestamp) as last_activity
+      FROM traffic_stats
+      WHERE port_forward_id = ?
+    `;
+    const params = [portForwardId];
+
+    if (since) {
+      sql += ' AND timestamp >= ?';
+      params.push(since);
+    }
+
+    return new Promise((resolve, reject) => {
+      this.db.get(sql, params, (err, row) => {
+        if (err) reject(err);
+        else resolve(row || { total_bytes_in: 0, total_bytes_out: 0, total_bytes: 0, record_count: 0, last_activity: null });
+      });
+    });
+  }
+
+  async getAllPortForwardsTraffic() {
+    const sql = `
+      SELECT
+        pf.id,
+        pf.name,
+        pf.remote_port,
+        c.name as client_name,
+        COALESCE(SUM(ts.bytes_in), 0) as total_bytes_in,
+        COALESCE(SUM(ts.bytes_out), 0) as total_bytes_out,
+        COALESCE(SUM(ts.bytes_in + ts.bytes_out), 0) as total_bytes,
+        MAX(ts.timestamp) as last_activity
+      FROM port_forwards pf
+      LEFT JOIN clients c ON pf.client_id = c.id
+      LEFT JOIN traffic_stats ts ON pf.id = ts.port_forward_id
+      GROUP BY pf.id, pf.name, pf.remote_port, c.name
+      ORDER BY total_bytes DESC
+    `;
+
+    return new Promise((resolve, reject) => {
+      this.db.all(sql, [], (err, rows) => {
+        if (err) reject(err);
+        else resolve(rows);
       });
     });
   }

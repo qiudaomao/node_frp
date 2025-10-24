@@ -7,6 +7,15 @@
   <link rel="stylesheet" href="/static/css/style.css">
 </head>
 <body>
+  <%
+    function formatBytes(bytes) {
+      if (bytes === 0) return '0 B';
+      const k = 1024;
+      const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+      const i = Math.floor(Math.log(bytes) / Math.log(k));
+      return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    }
+  %>
   <nav class="navbar">
     <div class="nav-container">
       <a href="/" class="nav-brand">FRP Admin</a>
@@ -32,6 +41,19 @@
         <h3>Active Forwards</h3>
         <div class="stat-number"><%= stats.active_forwards %></div>
         <div class="stat-label">of <%= stats.total_forwards %> total</div>
+      </div>
+      <div class="stat-card">
+        <h3>Total Traffic</h3>
+        <div class="stat-number">
+          <%
+            let totalTraffic = 0;
+            portForwards.forEach(function(forward) {
+              totalTraffic += forward.traffic.total_bytes || 0;
+            });
+          %>
+          <%= totalTraffic > 0 ? formatBytes(totalTraffic) : '0 B' %>
+        </div>
+        <div class="stat-label">All time</div>
       </div>
     </div>
 

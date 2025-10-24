@@ -7,6 +7,15 @@
   <link rel="stylesheet" href="/static/css/style.css">
 </head>
 <body>
+  <%
+    function formatBytes(bytes) {
+      if (bytes === 0) return '0 B';
+      const k = 1024;
+      const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+      const i = Math.floor(Math.log(bytes) / Math.log(k));
+      return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    }
+  %>
   <nav class="navbar">
     <div class="nav-container">
       <a href="/" class="nav-brand">FRP Admin</a>
@@ -36,6 +45,7 @@
               <th>Local Target</th>
               <th>Type</th>
               <th>Status</th>
+              <th>Traffic</th>
               <th>Actions</th>
             </tr>
           </thead>
@@ -51,6 +61,14 @@
                   <span class="status <%= forward.active ? 'status-active' : 'status-inactive' %>">
                     <%= forward.active ? 'Active' : (forward.enabled ? 'Client Offline' : 'Disabled') %>
                   </span>
+                </td>
+                <td>
+                  <span title="In: <%= forward.traffic.total_bytes_in %> bytes, Out: <%= forward.traffic.total_bytes_out %> bytes">
+                    <%= forward.traffic.total_bytes > 0 ? formatBytes(forward.traffic.total_bytes) : '-' %>
+                  </span>
+                  <% if (forward.traffic.last_activity) { %>
+                    <br><small style="color: #666;">Last: <%= new Date(forward.traffic.last_activity).toLocaleString() %></small>
+                  <% } %>
                 </td>
                 <td>
                   <button class="btn btn-sm <%= forward.enabled ? 'btn-warning' : 'btn-success' %>" onclick="togglePortForward(<%= forward.id %>, '<%= forward.name %>', <%= forward.enabled %>)">

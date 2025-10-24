@@ -285,24 +285,62 @@ class FRPServer {
         pendingConn.clientSocket.write(remainingBuffer);
       }
 
+      // Track traffic for this port forward
+      const portForwardId = pendingConn.portForwardId;
+      let bytesIn = 0;
+      let bytesOut = 0;
+
+      // Wrap socket to track traffic
+      const originalWrite = socket.write;
+      socket.write = function(data) {
+        if (data && data.length > 0) {
+          bytesOut += data.length;
+        }
+        return originalWrite.call(this, data);
+      };
+
+      const originalClientWrite = pendingConn.clientSocket.write;
+      pendingConn.clientSocket.write = function(data) {
+        if (data && data.length > 0) {
+          bytesIn += data.length;
+        }
+        return originalClientWrite.call(this, data);
+      };
+
       // Pipe the connections together
       pendingConn.clientSocket.pipe(socket);
       socket.pipe(pendingConn.clientSocket);
 
+      // Log traffic when connection ends
+      const logTraffic = async () => {
+        if (bytesIn > 0 || bytesOut > 0) {
+          try {
+            await this.database.updatePortForwardTraffic(portForwardId, bytesIn, bytesOut);
+            console.log(`Traffic logged for port forward ${portForwardId}: ${bytesIn} bytes in, ${bytesOut} bytes out`);
+          } catch (err) {
+            console.error('Failed to log traffic:', err);
+          }
+        }
+      };
+
       pendingConn.clientSocket.on("error", () => {
         socket.destroy();
+        logTraffic();
       });
 
       socket.on("error", () => {
         pendingConn.clientSocket.destroy();
+        logTraffic();
       });
 
       pendingConn.clientSocket.on("end", () => {
         socket.end();
+        logTraffic();
       });
 
       socket.on("end", () => {
         pendingConn.clientSocket.end();
+        logTraffic();
       });
     } else {
       console.error(`No pending connection found for ${connectionId}`);
@@ -347,7 +385,8 @@ class FRPServer {
         await this.createProxyServer(socket, {
           name: forward.name,
           remotePort: forward.remote_port,
-          proxyType: forward.proxy_type
+          proxyType: forward.proxy_type,
+          portForwardId: forward.id
         });
       }
     } catch (err) {
@@ -355,7 +394,7 @@ class FRPServer {
     }
   }
 
-  async createProxyServer(controlSocket, { name, remotePort, proxyType }) {
+  async createProxyServer(controlSocket, { name, remotePort, proxyType, portForwardId }) {
     // Check if port is already in use
     if (this.proxyServers.has(remotePort)) {
       console.error(`Port ${remotePort} already in use`);
@@ -364,7 +403,7 @@ class FRPServer {
 
     // Create proxy server for this remote port
     const proxyServer = net.createServer((clientSocket) => {
-      this.handleProxyConnection(controlSocket, clientSocket, name);
+      this.handleProxyConnection(controlSocket, clientSocket, name, portForwardId);
     });
 
     return new Promise((resolve, reject) => {
@@ -375,6 +414,7 @@ class FRPServer {
           server: proxyServer,
           name: name,
           controlSocket: controlSocket,
+          portForwardId: portForwardId,
         });
 
         if (!this.clients.has(controlSocket)) {
@@ -392,7 +432,7 @@ class FRPServer {
     });
   }
 
-  handleProxyConnection(controlSocket, clientSocket, proxyName) {
+  handleProxyConnection(controlSocket, clientSocket, proxyName, portForwardId) {
     const connectionId = Math.random().toString(36).substring(7);
 
     console.log(`New connection to proxy [${proxyName}], id: ${connectionId}`);
@@ -401,6 +441,7 @@ class FRPServer {
     this.pendingConnections.set(connectionId, {
       clientSocket: clientSocket,
       proxyName: proxyName,
+      portForwardId: portForwardId,
     });
 
     // Request client to establish a data connection
@@ -522,7 +563,8 @@ class FRPServer {
             await this.createProxyServer(socket, {
               name: forward.name,
               remotePort: forward.remote_port,
-              proxyType: forward.proxy_type
+              proxyType: forward.proxy_type,
+              portForwardId: forward.id
             });
           } catch (err) {
             console.error(`Failed to create proxy [${forward.name}]:`, err);

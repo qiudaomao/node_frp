@@ -107,8 +107,20 @@ class WebUIServer {
         const clients = await db.getAllClients();
         const portForwards = await db.getAllPortForwards();
         const connectedClientIds = this.frpServer ? this.frpServer.getConnectedClientIds() : [];
+        const trafficData = await db.getAllPortForwardsTraffic();
 
-        // Add connection status to clients and port forwards
+        // Create a traffic map for easy lookup
+        const trafficMap = {};
+        trafficData.forEach(t => {
+          trafficMap[t.id] = {
+            total_bytes_in: t.total_bytes_in,
+            total_bytes_out: t.total_bytes_out,
+            total_bytes: t.total_bytes,
+            last_activity: t.last_activity
+          };
+        });
+
+        // Add connection status and traffic to clients and port forwards
         const clientsWithStatus = clients.map(c => ({
           ...c,
           connected: connectedClientIds.includes(c.id)
@@ -117,7 +129,8 @@ class WebUIServer {
         const portForwardsWithStatus = portForwards.map(pf => ({
           ...pf,
           client_connected: connectedClientIds.includes(pf.client_id),
-          active: pf.enabled && connectedClientIds.includes(pf.client_id)
+          active: pf.enabled && connectedClientIds.includes(pf.client_id),
+          traffic: trafficMap[pf.id] || { total_bytes_in: 0, total_bytes_out: 0, total_bytes: 0, last_activity: null }
         }));
 
         res.render('dashboard', { stats, clients: clientsWithStatus, portForwards: portForwardsWithStatus });
@@ -208,12 +221,25 @@ class WebUIServer {
       try {
         const portForwards = await db.getAllPortForwards();
         const connectedClientIds = this.frpServer ? this.frpServer.getConnectedClientIds() : [];
+        const trafficData = await db.getAllPortForwardsTraffic();
 
-        // Add connection status to each port forward
+        // Create a traffic map for easy lookup
+        const trafficMap = {};
+        trafficData.forEach(t => {
+          trafficMap[t.id] = {
+            total_bytes_in: t.total_bytes_in,
+            total_bytes_out: t.total_bytes_out,
+            total_bytes: t.total_bytes,
+            last_activity: t.last_activity
+          };
+        });
+
+        // Add connection status and traffic to each port forward
         const portForwardsWithStatus = portForwards.map(pf => ({
           ...pf,
           client_connected: connectedClientIds.includes(pf.client_id),
-          active: pf.enabled && connectedClientIds.includes(pf.client_id)
+          active: pf.enabled && connectedClientIds.includes(pf.client_id),
+          traffic: trafficMap[pf.id] || { total_bytes_in: 0, total_bytes_out: 0, total_bytes: 0, last_activity: null }
         }));
 
         res.render('port-forwards', { portForwards: portForwardsWithStatus });
@@ -458,10 +484,22 @@ class WebUIServer {
       }
     });
 
+    this.app.get('/api/port-forwards/:id/traffic', requireAuth, async (req, res) => {
+      try {
+        const portForwardId = req.params.id;
+        const since = req.query.since ? new Date(req.query.since) : null;
+        const traffic = await db.getPortForwardTraffic(portForwardId, since);
+        res.json(traffic);
+      } catch (err) {
+        res.status(500).json({ error: err.message });
+      }
+    });
+
     this.app.get('/api/statistics', requireAuth, async (req, res) => {
       try {
         const stats = await db.getStatistics();
-        res.json(stats);
+        const traffic = await db.getAllPortForwardsTraffic();
+        res.json({ ...stats, traffic });
       } catch (err) {
         res.status(500).json({ error: err.message });
       }
