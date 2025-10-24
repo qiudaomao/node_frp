@@ -3,6 +3,10 @@ bindPort: 7700
 # Database path
 databasePath: ./frp.db
 
+# Traffic flush interval in seconds (default: 30)
+# How often to save accumulated traffic data to database
+trafficFlushInterval: 30
+
 # Web UI Configuration
 webUI:
   enabled: true

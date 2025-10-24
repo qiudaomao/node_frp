@@ -12,6 +12,10 @@ class FRPServer {
     this.clientSockets = new Map(); // Maps clientId -> socket
     this.pendingConnections = new Map();
     this.database = new Database(config.databasePath || './frp.db');
+
+    // Real-time traffic tracking
+    this.trafficCounters = new Map(); // portForwardId -> { bytesIn, bytesOut }
+    this.trafficFlushInterval = null;
   }
 
   async start() {
@@ -51,6 +55,10 @@ class FRPServer {
     } else {
       console.log('Web UI is disabled');
     }
+
+    // Start periodic traffic flushing (configurable interval)
+    const flushIntervalMs = (this.config.trafficFlushInterval || 30) * 1000;
+    this.startTrafficFlushing(flushIntervalMs);
   }
 
   handleControlConnection(socket) {
@@ -287,60 +295,48 @@ class FRPServer {
 
       // Track traffic for this port forward
       const portForwardId = pendingConn.portForwardId;
-      let bytesIn = 0;
-      let bytesOut = 0;
+      const self = this; // Capture 'this' reference
 
       // Wrap socket to track traffic
-      const originalWrite = socket.write;
+      const originalWrite = socket.write.bind(socket);
       socket.write = function(data) {
         if (data && data.length > 0) {
-          bytesOut += data.length;
+          // Update real-time counter
+          self.incrementTraffic(portForwardId, 0, data.length);
         }
-        return originalWrite.call(this, data);
+        return originalWrite(data);
       };
 
-      const originalClientWrite = pendingConn.clientSocket.write;
+      const originalClientWrite = pendingConn.clientSocket.write.bind(pendingConn.clientSocket);
       pendingConn.clientSocket.write = function(data) {
         if (data && data.length > 0) {
-          bytesIn += data.length;
+          // Update real-time counter
+          self.incrementTraffic(portForwardId, data.length, 0);
         }
-        return originalClientWrite.call(this, data);
+        return originalClientWrite(data);
       };
 
       // Pipe the connections together
       pendingConn.clientSocket.pipe(socket);
       socket.pipe(pendingConn.clientSocket);
 
-      // Log traffic when connection ends
-      const logTraffic = async () => {
-        if (bytesIn > 0 || bytesOut > 0) {
-          try {
-            await this.database.updatePortForwardTraffic(portForwardId, bytesIn, bytesOut);
-            console.log(`Traffic logged for port forward ${portForwardId}: ${bytesIn} bytes in, ${bytesOut} bytes out`);
-          } catch (err) {
-            console.error('Failed to log traffic:', err);
-          }
-        }
-      };
+      // Note: Traffic is now tracked in real-time and flushed periodically
+      // No need to track locally anymore
 
       pendingConn.clientSocket.on("error", () => {
         socket.destroy();
-        logTraffic();
       });
 
       socket.on("error", () => {
         pendingConn.clientSocket.destroy();
-        logTraffic();
       });
 
       pendingConn.clientSocket.on("end", () => {
         socket.end();
-        logTraffic();
       });
 
       socket.on("end", () => {
         pendingConn.clientSocket.end();
-        logTraffic();
       });
     } else {
       console.error(`No pending connection found for ${connectionId}`);
@@ -507,7 +503,69 @@ class FRPServer {
     return connectedIds;
   }
 
+  // Get real-time traffic data
+  getTrafficCounters() {
+    const traffic = {};
+    for (const [portForwardId, counters] of this.trafficCounters.entries()) {
+      traffic[portForwardId] = { ...counters };
+    }
+    return traffic;
+  }
+
+  // Increment traffic counter for a port forward
+  incrementTraffic(portForwardId, bytesIn, bytesOut) {
+    if (!this.trafficCounters.has(portForwardId)) {
+      this.trafficCounters.set(portForwardId, { bytesIn: 0, bytesOut: 0 });
+    }
+    const counter = this.trafficCounters.get(portForwardId);
+    counter.bytesIn += bytesIn;
+    counter.bytesOut += bytesOut;
+  }
+
+  // Flush traffic counters to database periodically
+  async flushTrafficCounters() {
+    const countersToFlush = new Map(this.trafficCounters);
+
+    // Reset counters
+    this.trafficCounters.clear();
+
+    // Flush to database
+    for (const [portForwardId, counters] of countersToFlush.entries()) {
+      if (counters.bytesIn > 0 || counters.bytesOut > 0) {
+        try {
+          await this.database.updatePortForwardTraffic(portForwardId, counters.bytesIn, counters.bytesOut);
+        } catch (err) {
+          console.error(`Failed to flush traffic for port forward ${portForwardId}:`, err);
+        }
+      }
+    }
+  }
+
+  // Start periodic traffic flushing
+  startTrafficFlushing(intervalMs = 30000) {
+    if (this.trafficFlushInterval) {
+      clearInterval(this.trafficFlushInterval);
+    }
+
+    this.trafficFlushInterval = setInterval(async () => {
+      await this.flushTrafficCounters();
+    }, intervalMs);
+
+    console.log(`Traffic flushing started (interval: ${intervalMs}ms)`);
+  }
+
   stop() {
+    // Stop periodic traffic flushing
+    if (this.trafficFlushInterval) {
+      clearInterval(this.trafficFlushInterval);
+      this.trafficFlushInterval = null;
+    }
+
+    // Flush remaining traffic before stopping
+    this.flushTrafficCounters().catch(err => {
+      console.error('Failed to flush traffic on shutdown:', err);
+    });
+
     if (this.controlServer) {
       this.controlServer.close();
     }

@@ -28,12 +28,22 @@ npm install
 ```yaml
 bindPort: 7000
 databasePath: ./frp.db
+trafficFlushInterval: 30  # Traffic flush interval in seconds (default: 30)
 webUI:
   enabled: true
   port: 8080
   username: admin
   password: admin
 ```
+
+**Configuration Options:**
+- `bindPort` - Control port for client connections (default: 7000)
+- `databasePath` - Path to SQLite database file (default: ./frp.db)
+- `trafficFlushInterval` - How often to flush traffic statistics to database in seconds (default: 30)
+- `webUI.enabled` - Enable/disable web UI (default: true)
+- `webUI.port` - Web UI port (default: 8080)
+- `webUI.username` - Web UI admin username (default: admin)
+- `webUI.password` - Web UI admin password (default: admin)
 
 ### Client Configuration (frpc.yaml)
 
@@ -111,7 +121,14 @@ The web interface provides complete management capabilities:
    - **Client Offline** (yellow): Port forward is enabled but client is disconnected
    - **Disabled** (yellow): Port forward is manually disabled
 
-3. **Quick Actions**:
+3. **Traffic Monitoring**:
+   - Each port forward displays total traffic (bytes transferred)
+   - Traffic updates in real-time (flushed every 30 seconds by default)
+   - Hover over traffic numbers to see in/out breakdown
+   - Last activity timestamp shows when port forward was last used
+   - Traffic persists across server restarts (stored in database)
+
+4. **Quick Actions**:
    - Enable/Disable toggles without editing
    - Delete operations with confirmation
    - All changes take effect immediately for connected clients
@@ -198,6 +215,34 @@ node src/cli.js client
 ssh user@your.server.ip -p 6000
 ```
 
+## Traffic Monitoring
+
+The FRP server provides real-time traffic monitoring for all port forwards:
+
+### Features
+- **Real-time tracking**: Traffic is counted as data flows through connections
+- **Periodic updates**: Statistics are flushed to database every 30 seconds (configurable)
+- **Persistent storage**: Traffic data survives server restarts
+- **Web UI display**:
+  - Dashboard shows total traffic across all port forwards
+  - Port forwards page shows traffic per forward with last activity timestamp
+  - Tooltip displays in/out breakdown on hover
+
+### How It Works
+1. **In-memory counters**: As data flows, bytes are tracked in memory for minimal overhead
+2. **Periodic flush**: Every N seconds (default 30), accumulated traffic is written to database
+3. **Combined view**: Web UI displays database traffic + current in-memory traffic for real-time updates
+4. **Graceful shutdown**: Remaining traffic is flushed when server stops
+
+### Configuration
+Adjust the flush interval in your server config:
+```yaml
+trafficFlushInterval: 30  # Flush every 30 seconds
+```
+
+Shorter intervals = more frequent database writes but more accurate real-time data
+Longer intervals = less database I/O but less frequent updates
+
 ## REST API
 
 The server provides a REST API for programmatic access (requires authentication):
@@ -210,9 +255,10 @@ The server provides a REST API for programmatic access (requires authentication)
 - `DELETE /api/clients/:id` - Delete client
 
 ### Port Forwards
-- `GET /api/port-forwards` - List all port forwards with connection status
+- `GET /api/port-forwards` - List all port forwards with connection status and traffic
 - `POST /api/port-forwards` - Create port forward
 - `GET /api/port-forwards/:id` - Get port forward details
+- `GET /api/port-forwards/:id/traffic` - Get traffic statistics for specific port forward (supports `?since=date`)
 - `PUT /api/port-forwards/:id` - Update port forward
 - `PUT /api/port-forwards/:id/toggle` - Enable/disable port forward
 - `DELETE /api/port-forwards/:id` - Delete port forward
@@ -228,6 +274,7 @@ You can override configuration using environment variables:
 - `DB_PATH` - Database file path (default: ./frp.db)
 - `ADMIN_USERNAME` - Web UI admin username (default: 'admin')
 - `ADMIN_PASSWORD` - Web UI admin password (default: 'admin')
+- `TRAFFIC_FLUSH_INTERVAL` - Traffic flush interval in seconds (default: 30)
 
 ## Architecture
 

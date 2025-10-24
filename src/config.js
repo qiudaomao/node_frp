@@ -71,6 +71,11 @@ class ConfigLoader {
       config.databasePath = './frp.db';
     }
 
+    // Traffic flush interval (in seconds)
+    if (!config.trafficFlushInterval) {
+      config.trafficFlushInterval = 30; // Default: 30 seconds
+    }
+
     return config;
   }
 }

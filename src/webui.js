@@ -108,17 +108,34 @@ class WebUIServer {
         const portForwards = await db.getAllPortForwards();
         const connectedClientIds = this.frpServer ? this.frpServer.getConnectedClientIds() : [];
         const trafficData = await db.getAllPortForwardsTraffic();
+        const realtimeTraffic = this.frpServer ? this.frpServer.getTrafficCounters() : {};
 
         // Create a traffic map for easy lookup
         const trafficMap = {};
         trafficData.forEach(t => {
           trafficMap[t.id] = {
-            total_bytes_in: t.total_bytes_in,
-            total_bytes_out: t.total_bytes_out,
-            total_bytes: t.total_bytes,
+            total_bytes_in: t.total_bytes_in || 0,
+            total_bytes_out: t.total_bytes_out || 0,
+            total_bytes: t.total_bytes || 0,
             last_activity: t.last_activity
           };
         });
+
+        // Add real-time traffic to existing traffic data
+        for (const [portForwardId, realtime] of Object.entries(realtimeTraffic)) {
+          if (!trafficMap[portForwardId]) {
+            trafficMap[portForwardId] = {
+              total_bytes_in: 0,
+              total_bytes_out: 0,
+              total_bytes: 0,
+              last_activity: null
+            };
+          }
+          trafficMap[portForwardId].total_bytes_in += realtime.bytesIn;
+          trafficMap[portForwardId].total_bytes_out += realtime.bytesOut;
+          trafficMap[portForwardId].total_bytes += realtime.bytesIn + realtime.bytesOut;
+          trafficMap[portForwardId].last_activity = new Date().toISOString();
+        }
 
         // Add connection status and traffic to clients and port forwards
         const clientsWithStatus = clients.map(c => ({
@@ -222,17 +239,34 @@ class WebUIServer {
         const portForwards = await db.getAllPortForwards();
         const connectedClientIds = this.frpServer ? this.frpServer.getConnectedClientIds() : [];
         const trafficData = await db.getAllPortForwardsTraffic();
+        const realtimeTraffic = this.frpServer ? this.frpServer.getTrafficCounters() : {};
 
         // Create a traffic map for easy lookup
         const trafficMap = {};
         trafficData.forEach(t => {
           trafficMap[t.id] = {
-            total_bytes_in: t.total_bytes_in,
-            total_bytes_out: t.total_bytes_out,
-            total_bytes: t.total_bytes,
+            total_bytes_in: t.total_bytes_in || 0,
+            total_bytes_out: t.total_bytes_out || 0,
+            total_bytes: t.total_bytes || 0,
             last_activity: t.last_activity
           };
         });
+
+        // Add real-time traffic to existing traffic data
+        for (const [portForwardId, realtime] of Object.entries(realtimeTraffic)) {
+          if (!trafficMap[portForwardId]) {
+            trafficMap[portForwardId] = {
+              total_bytes_in: 0,
+              total_bytes_out: 0,
+              total_bytes: 0,
+              last_activity: null
+            };
+          }
+          trafficMap[portForwardId].total_bytes_in += realtime.bytesIn;
+          trafficMap[portForwardId].total_bytes_out += realtime.bytesOut;
+          trafficMap[portForwardId].total_bytes += realtime.bytesIn + realtime.bytesOut;
+          trafficMap[portForwardId].last_activity = new Date().toISOString();
+        }
 
         // Add connection status and traffic to each port forward
         const portForwardsWithStatus = portForwards.map(pf => ({
