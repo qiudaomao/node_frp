@@ -31,8 +31,8 @@ databasePath: ./frp.db
 webUI:
   enabled: true
   port: 8080
-  adminPassword: admin
-  sessionSecret: frp-secret-change-me
+  username: admin
+  password: admin
 ```
 
 ### Client Configuration (frpc.yaml)
@@ -78,8 +78,10 @@ The web interface provides complete management capabilities:
 
 1. Start the server with web UI enabled (default)
 2. Open http://localhost:8080 in your browser
-3. Login with the default password: `admin`
-4. **Important**: Change the admin password in the server configuration
+3. Login with the default credentials:
+   - Username: `admin`
+   - Password: `admin`
+4. **Important**: Change the default username and password in the server configuration or environment variables
 
 ### Managing Clients
 
@@ -155,7 +157,7 @@ node src/cli.js server
 
 **2. Access Web UI:**
 - Open http://localhost:8080
-- Login with password: `admin`
+- Login with username: `admin`, password: `admin`
 
 **3. Create a client:**
 - Navigate to "Clients" → "Add Client"
@@ -224,8 +226,8 @@ You can override configuration using environment variables:
 
 - `WEB_PORT` - Web UI port (default: 8080)
 - `DB_PATH` - Database file path (default: ./frp.db)
+- `ADMIN_USERNAME` - Web UI admin username (default: 'admin')
 - `ADMIN_PASSWORD` - Web UI admin password (default: 'admin')
-- `SESSION_SECRET` - Session secret for web UI (default: 'frp-secret-change-me')
 
 ## Architecture
 
@@ -262,7 +264,8 @@ You can override configuration using environment variables:
 
 ## Security Considerations
 
-- **Change default passwords**: Update `adminPassword` in server config
+- **Change default credentials**: Update `username` and `password` in server config or use environment variables
+- **Use strong passwords**: Choose complex passwords for production environments
 - **Use strong tokens**: Tokens are auto-generated with crypto.randomBytes
 - **HTTPS**: Consider placing Web UI behind reverse proxy with SSL
 - **Firewall**: Only expose necessary ports (control port and proxy ports)

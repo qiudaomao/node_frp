@@ -7,5 +7,5 @@ databasePath: ./frp.db
 webUI:
   enabled: true
   port: 8080
-  adminPassword: admin
-  sessionSecret: frp-secret-change-me-in-production
+  username: admin
+  password: admin

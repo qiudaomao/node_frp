@@ -24,8 +24,13 @@ class WebUIServer {
     this.app.use(bodyParser.json());
     this.app.use(bodyParser.urlencoded({ extended: true }));
     this.app.use(cookieParser());
+
+    // Generate a random session secret on startup
+    const crypto = require('crypto');
+    const sessionSecret = crypto.randomBytes(32).toString('hex');
+
     this.app.use(session({
-      secret: this.config.webUI.sessionSecret,
+      secret: sessionSecret,
       resave: false,
       saveUninitialized: false,
       cookie: {
@@ -80,12 +85,13 @@ class WebUIServer {
     });
 
     this.app.post('/login', (req, res) => {
-      const { password } = req.body;
-      if (password === this.config.webUI.adminPassword) {
+      const { username, password } = req.body;
+      if (username === this.config.webUI.username && password === this.config.webUI.password) {
         req.session.authenticated = true;
+        req.session.username = username;
         res.redirect('/');
       } else {
-        res.render('login', { error: 'Invalid password' });
+        res.render('login', { error: 'Invalid username or password' });
       }
     });
 
@@ -125,7 +131,15 @@ class WebUIServer {
     this.app.get('/clients', requireAuth, async (req, res) => {
       try {
         const clients = await db.getAllClients();
-        res.render('clients', { clients });
+        const connectedClientIds = this.frpServer ? this.frpServer.getConnectedClientIds() : [];
+
+        // Add connection status to each client
+        const clientsWithStatus = clients.map(c => ({
+          ...c,
+          connected: connectedClientIds.includes(c.id)
+        }));
+
+        res.render('clients', { clients: clientsWithStatus });
       } catch (err) {
         console.error('Error loading clients:', err);
         res.status(500).send('Internal server error');
@@ -459,7 +473,7 @@ class WebUIServer {
       const port = this.config.webUI.port;
       this.httpServer = this.app.listen(port, () => {
         console.log(`Web UI available at http://localhost:${port}`);
-        console.log(`Admin password: ${this.config.webUI.adminPassword}`);
+        console.log(`Login credentials - Username: ${this.config.webUI.username}, Password: ${this.config.webUI.password}`);
         resolve();
       });
 

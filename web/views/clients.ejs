@@ -33,7 +33,7 @@
               <th>Name</th>
               <th>Description</th>
               <th>Token</th>
-              <th>Status</th>
+              <th>Connection Status</th>
               <th>Created</th>
               <th>Actions</th>
             </tr>
@@ -45,8 +45,8 @@
                 <td><%= client.description || '-' %></td>
                 <td><code><%= client.token.substring(0, 16) %>...</code></td>
                 <td>
-                  <span class="status <%= client.enabled ? 'status-active' : 'status-inactive' %>">
-                    <%= client.enabled ? 'Active' : 'Inactive' %>
+                  <span class="status <%= client.connected ? 'status-active' : 'status-inactive' %>">
+                    <%= client.connected ? 'Connected' : 'Offline' %>
                   </span>
                 </td>
                 <td><%= new Date(client.created_at).toLocaleDateString() %></td>

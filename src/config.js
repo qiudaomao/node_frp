@@ -52,14 +52,18 @@ class ConfigLoader {
       config.webUI.port = 8080;
     }
 
-    if (!config.webUI.adminPassword) {
-      config.webUI.adminPassword = 'admin';
-      console.warn('Warning: Using default admin password. Set webUI.adminPassword in config for production.');
+    if (!config.webUI.username) {
+      config.webUI.username = process.env.ADMIN_USERNAME || 'admin';
+      if (!process.env.ADMIN_USERNAME) {
+        console.warn('Warning: Using default username. Set webUI.username in config or ADMIN_USERNAME env var for production.');
+      }
     }
 
-    if (!config.webUI.sessionSecret) {
-      config.webUI.sessionSecret = 'frp-secret-change-me';
-      console.warn('Warning: Using default session secret. Set webUI.sessionSecret in config for production.');
+    if (!config.webUI.password) {
+      config.webUI.password = process.env.ADMIN_PASSWORD || 'admin';
+      if (!process.env.ADMIN_PASSWORD) {
+        console.warn('Warning: Using default password. Set webUI.password in config or ADMIN_PASSWORD env var for production.');
+      }
     }
 
     // Database path
