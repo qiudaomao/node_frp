@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Dashboard - FRP Admin</title>
   <link rel="stylesheet" href="/static/css/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 </head>
 <body>
   <%
@@ -54,6 +55,24 @@
           <%= totalTraffic > 0 ? formatBytes(totalTraffic) : '0 B' %>
         </div>
         <div class="stat-label">All time</div>
+      </div>
+    </div>
+
+    <div class="charts-section" style="margin: 2rem 0;">
+      <h2>Traffic Distribution</h2>
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 2rem; margin-top: 1rem;">
+        <div style="background: white; padding: 1.5rem; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+          <h3 style="margin-top: 0; margin-bottom: 1rem; text-align: center;">Traffic by Client</h3>
+          <div style="position: relative; height: 300px;">
+            <canvas id="clientTrafficChart"></canvas>
+          </div>
+        </div>
+        <div style="background: white; padding: 1.5rem; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+          <h3 style="margin-top: 0; margin-bottom: 1rem; text-align: center;">Traffic by Port Forward</h3>
+          <div style="position: relative; height: 300px;">
+            <canvas id="forwardTrafficChart"></canvas>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -149,5 +168,180 @@
   <footer class="footer">
     <p>&copy; 2025 FRP Server Admin Panel</p>
   </footer>
+
+  <script>
+    // Prepare data for charts
+    const clientTrafficData = {};
+    const forwardTrafficData = {};
+
+    <%
+      // Aggregate traffic by client
+      const clientTraffic = {};
+      portForwards.forEach(function(forward) {
+        const clientName = forward.client_name;
+        const traffic = forward.traffic.total_bytes || 0;
+        if (!clientTraffic[clientName]) {
+          clientTraffic[clientName] = 0;
+        }
+        clientTraffic[clientName] += traffic;
+      });
+    %>
+
+    // Client traffic data
+    <% Object.keys(clientTraffic).forEach(function(clientName) { %>
+      clientTrafficData['<%= clientName %>'] = <%= clientTraffic[clientName] %>;
+    <% }); %>
+
+    // Port forward traffic data
+    <% portForwards.forEach(function(forward) { %>
+      forwardTrafficData['<%= forward.name %> (<%= forward.remote_port %>)'] = <%= forward.traffic.total_bytes || 0 %>;
+    <% }); %>
+
+    // Generate colors for pie charts
+    function generateColors(count) {
+      const colors = [
+        '#FF6384', '#36A2EB', '#FFCE56', '#4BC0C0', '#9966FF',
+        '#FF9F40', '#FF6384', '#C9CBCF', '#4BC0C0', '#FF6384',
+        '#36A2EB', '#FFCE56', '#4BC0C0', '#9966FF', '#FF9F40'
+      ];
+      return colors.slice(0, count);
+    }
+
+    // Filter out zero values and sort by traffic
+    function prepareChartData(data) {
+      const entries = Object.entries(data)
+        .filter(([name, bytes]) => bytes > 0)
+        .sort((a, b) => b[1] - a[1]);
+
+      if (entries.length === 0) {
+        return {
+          labels: ['No traffic data'],
+          data: [1],
+          hasData: false
+        };
+      }
+
+      return {
+        labels: entries.map(e => e[0]),
+        data: entries.map(e => e[1]),
+        hasData: true
+      };
+    }
+
+    // Format bytes for tooltip
+    function formatBytes(bytes) {
+      if (bytes === 0) return '0 B';
+      const k = 1024;
+      const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+      const i = Math.floor(Math.log(bytes) / Math.log(k));
+      return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    }
+
+    // Create Client Traffic Chart
+    const clientChartData = prepareChartData(clientTrafficData);
+    const clientCtx = document.getElementById('clientTrafficChart').getContext('2d');
+    new Chart(clientCtx, {
+      type: 'pie',
+      data: {
+        labels: clientChartData.labels,
+        datasets: [{
+          data: clientChartData.data,
+          backgroundColor: generateColors(clientChartData.labels.length),
+          borderWidth: 2,
+          borderColor: '#fff'
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: {
+            position: 'bottom',
+            labels: {
+              padding: 10,
+              font: {
+                size: 12
+              }
+            }
+          },
+          tooltip: {
+            callbacks: {
+              label: function(context) {
+                if (!clientChartData.hasData) return 'No data';
+                const label = context.label || '';
+                const value = formatBytes(context.parsed);
+                const total = context.dataset.data.reduce((a, b) => a + b, 0);
+                const percentage = ((context.parsed / total) * 100).toFixed(1);
+                return label + ': ' + value + ' (' + percentage + '%)';
+              }
+            }
+          }
+        }
+      }
+    });
+
+    // Create Port Forward Traffic Chart
+    const forwardChartData = prepareChartData(forwardTrafficData);
+    const forwardCtx = document.getElementById('forwardTrafficChart').getContext('2d');
+    new Chart(forwardCtx, {
+      type: 'pie',
+      data: {
+        labels: forwardChartData.labels,
+        datasets: [{
+          data: forwardChartData.data,
+          backgroundColor: generateColors(forwardChartData.labels.length),
+          borderWidth: 2,
+          borderColor: '#fff'
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: {
+            position: 'bottom',
+            labels: {
+              padding: 10,
+              font: {
+                size: 12
+              },
+              // Limit legend label length
+              generateLabels: function(chart) {
+                const data = chart.data;
+                if (data.labels.length && data.datasets.length) {
+                  return data.labels.map((label, i) => {
+                    const meta = chart.getDatasetMeta(0);
+                    const style = meta.controller.getStyle(i);
+                    const displayLabel = label.length > 30 ? label.substring(0, 27) + '...' : label;
+                    return {
+                      text: displayLabel,
+                      fillStyle: style.backgroundColor,
+                      strokeStyle: style.borderColor,
+                      lineWidth: style.borderWidth,
+                      hidden: false,
+                      index: i
+                    };
+                  });
+                }
+                return [];
+              }
+            }
+          },
+          tooltip: {
+            callbacks: {
+              label: function(context) {
+                if (!forwardChartData.hasData) return 'No data';
+                const label = context.label || '';
+                const value = formatBytes(context.parsed);
+                const total = context.dataset.data.reduce((a, b) => a + b, 0);
+                const percentage = ((context.parsed / total) * 100).toFixed(1);
+                return label + ': ' + value + ' (' + percentage + '%)';
+              }
+            }
+          }
+        }
+      }
+    });
+  </script>
 </body>
 </html>
