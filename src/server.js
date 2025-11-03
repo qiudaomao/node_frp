@@ -183,7 +183,9 @@ class FRPServer {
                 remotePort: f.remote_port,
                 localIp: f.local_ip,
                 localPort: f.local_port,
-                proxyType: f.proxy_type
+                proxyType: f.proxy_type,
+                direction: f.direction,
+                remoteIp: f.remote_ip
               }));
             } catch (err) {
               console.error("Failed to load port forwards:", err);
@@ -288,56 +290,98 @@ class FRPServer {
 
       this.pendingConnections.delete(connectionId);
 
-      // Pipe any remaining buffered data
-      if (remainingBuffer.length > 0) {
-        pendingConn.clientSocket.write(remainingBuffer);
-      }
-
-      // Track traffic for this port forward
       const portForwardId = pendingConn.portForwardId;
       const self = this; // Capture 'this' reference
 
-      // Wrap socket to track traffic
-      const originalWrite = socket.write.bind(socket);
-      socket.write = function(data) {
-        if (data && data.length > 0) {
-          // Update real-time counter
-          self.incrementTraffic(portForwardId, 0, data.length);
+      // Two modes:
+      // 1) forward mode: pendingConn.clientSocket is a socket from external client to server proxy
+      // 2) reverse mode: pendingConn.targetSocket is a socket from server to target on server network
+      if (pendingConn.clientSocket) {
+        // Pipe any remaining buffered data
+        if (remainingBuffer.length > 0) {
+          pendingConn.clientSocket.write(remainingBuffer);
         }
-        return originalWrite(data);
-      };
 
-      const originalClientWrite = pendingConn.clientSocket.write.bind(pendingConn.clientSocket);
-      pendingConn.clientSocket.write = function(data) {
-        if (data && data.length > 0) {
-          // Update real-time counter
-          self.incrementTraffic(portForwardId, data.length, 0);
-        }
-        return originalClientWrite(data);
-      };
+        // Wrap socket to track traffic
+        const originalWrite = socket.write.bind(socket);
+        socket.write = function(data) {
+          if (data && data.length > 0) {
+            // Update real-time counter
+            self.incrementTraffic(portForwardId, 0, data.length);
+          }
+          return originalWrite(data);
+        };
 
-      // Pipe the connections together
-      pendingConn.clientSocket.pipe(socket);
-      socket.pipe(pendingConn.clientSocket);
+        const originalClientWrite = pendingConn.clientSocket.write.bind(pendingConn.clientSocket);
+        pendingConn.clientSocket.write = function(data) {
+          if (data && data.length > 0) {
+            // Update real-time counter
+            self.incrementTraffic(portForwardId, data.length, 0);
+          }
+          return originalClientWrite(data);
+        };
 
-      // Note: Traffic is now tracked in real-time and flushed periodically
-      // No need to track locally anymore
+        // Pipe the connections together
+        pendingConn.clientSocket.pipe(socket);
+        socket.pipe(pendingConn.clientSocket);
 
-      pendingConn.clientSocket.on("error", () => {
+        pendingConn.clientSocket.on("error", () => {
+          socket.destroy();
+        });
+
+        socket.on("error", () => {
+          pendingConn.clientSocket.destroy();
+        });
+
+        pendingConn.clientSocket.on("end", () => {
+          socket.end();
+        });
+
+        socket.on("end", () => {
+          pendingConn.clientSocket.end();
+        });
+      } else if (pendingConn.targetSocket) {
+        // Reverse mode: pipe data socket <-> targetSocket
+        const targetSocket = pendingConn.targetSocket;
+
+        // Wrap socket writes for traffic tracking
+        const originalWrite = socket.write.bind(socket);
+        socket.write = function(data) {
+          if (data && data.length > 0) {
+            self.incrementTraffic(portForwardId, data.length, 0);
+          }
+          return originalWrite(data);
+        };
+
+        const originalTargetWrite = targetSocket.write.bind(targetSocket);
+        targetSocket.write = function(data) {
+          if (data && data.length > 0) {
+            self.incrementTraffic(portForwardId, 0, data.length);
+          }
+          return originalTargetWrite(data);
+        };
+
+        // Pipe the connections
+        socket.pipe(targetSocket);
+        targetSocket.pipe(socket);
+
+        // Errors/cleanup
+        targetSocket.on('error', () => {
+          socket.destroy();
+        });
+        socket.on('error', () => {
+          targetSocket.destroy();
+        });
+        targetSocket.on('end', () => {
+          socket.end();
+        });
+        socket.on('end', () => {
+          targetSocket.end();
+        });
+      } else {
+        console.error(`Pending connection ${connectionId} missing sockets`);
         socket.destroy();
-      });
-
-      socket.on("error", () => {
-        pendingConn.clientSocket.destroy();
-      });
-
-      pendingConn.clientSocket.on("end", () => {
-        socket.end();
-      });
-
-      socket.on("end", () => {
-        pendingConn.clientSocket.end();
-      });
+      }
     } else {
       console.error(`No pending connection found for ${connectionId}`);
       socket.destroy();
@@ -363,6 +407,59 @@ class FRPServer {
         }
         socket.write(JSON.stringify({ type: "heartbeat_ack" }) + "\n");
         break;
+      case "reverse_connection": {
+        // Client wants the server to initiate connection to a target on server network
+        const { proxyName, connectionId } = msg;
+        if (!socket.clientId) {
+          console.error('reverse_connection received but clientId not set');
+          return;
+        }
+        // Lookup port forward by client and name
+        this.database.getPortForwardsByClient(socket.clientId)
+          .then(forwards => {
+            const forward = forwards.find(f => f.name === proxyName && f.direction === 'reverse');
+            if (!forward) {
+              console.error(`Reverse forward [${proxyName}] not found for client ${socket.clientName}`);
+              socket.write(JSON.stringify({ type: 'reverse_failed', connectionId, error: 'Forward not found' }) + "\n");
+              return;
+            }
+            const remoteIp = forward.remote_ip || '127.0.0.1';
+            const remotePort = forward.remote_port;
+
+            // Connect to target on server side
+            const targetSocket = net.createConnection(remotePort, remoteIp, () => {
+              console.log(`Connected to server-side target ${remoteIp}:${remotePort} for reverse [${proxyName}]`);
+              // Store pending connection awaiting data socket from client
+              this.pendingConnections.set(connectionId, {
+                targetSocket,
+                proxyName,
+                portForwardId: forward.id,
+              });
+              // Notify client to proceed opening data connection
+              socket.write(JSON.stringify({ type: 'reverse_ready', connectionId }) + "\n");
+            });
+
+            targetSocket.on('error', (err) => {
+              console.error(`Failed to connect target for reverse [${proxyName}]:`, err.message);
+              socket.write(JSON.stringify({ type: 'reverse_failed', connectionId, error: err.message }) + "\n");
+            });
+
+            // Timeout if client doesn't open data connection in time
+            setTimeout(() => {
+              const pending = this.pendingConnections.get(connectionId);
+              if (pending && pending.targetSocket === targetSocket) {
+                console.log(`Reverse connection ${connectionId} timed out waiting for data socket`);
+                try { targetSocket.destroy(); } catch {}
+                this.pendingConnections.delete(connectionId);
+              }
+            }, 10000);
+          })
+          .catch(err => {
+            console.error('Database error during reverse_connection:', err);
+            socket.write(JSON.stringify({ type: 'reverse_failed', connectionId, error: 'Server error' }) + "\n");
+          });
+        break;
+      }
       default:
         console.log("Unknown message type:", msg.type);
     }
@@ -378,12 +475,22 @@ class FRPServer {
       const portForwards = await this.database.getPortForwardsByClient(socket.clientId);
 
       for (const forward of portForwards) {
-        await this.createProxyServer(socket, {
-          name: forward.name,
-          remotePort: forward.remote_port,
-          proxyType: forward.proxy_type,
-          portForwardId: forward.id
-        });
+        const direction = forward.direction || 'forward';
+        const remote_ip = forward.remote_ip || '127.0.0.1';
+        if (direction === 'forward') {
+          // Traditional forward: server listens on remote_port, forwards to client's local_ip:local_port
+          await this.createProxyServer(socket, {
+            name: forward.name,
+            remotePort: forward.remote_port,
+            proxyType: forward.proxy_type,
+            portForwardId: forward.id,
+            direction
+          });
+        } else if (direction === 'reverse') {
+          // Reverse forward: client will listen on local_port, server connects to remote_ip:remote_port
+          // No proxy server needed on server side for reverse forwards
+          console.log(`Reverse forward [${forward.name}] configured: client will listen on ${forward.local_ip}:${forward.local_port}, server will connect to ${remote_ip}:${forward.remote_port}`);
+        }
       }
     } catch (err) {
       console.error('Failed to create client proxies:', err);
@@ -614,19 +721,23 @@ class FRPServer {
       const remainingPorts = currentPorts.filter(port => newPortSet.has(port));
       this.clients.set(socket, remainingPorts);
 
-      // Create new proxy servers
+      // Create new proxy servers or reverse configs
       for (const forward of newForwards) {
-        if (!this.proxyServers.has(forward.remote_port)) {
-          try {
-            await this.createProxyServer(socket, {
-              name: forward.name,
-              remotePort: forward.remote_port,
-              proxyType: forward.proxy_type,
-              portForwardId: forward.id
-            });
-          } catch (err) {
-            console.error(`Failed to create proxy [${forward.name}]:`, err);
+        if (forward.direction === 'forward') {
+          if (!this.proxyServers.has(forward.remote_port)) {
+            try {
+              await this.createProxyServer(socket, {
+                name: forward.name,
+                remotePort: forward.remote_port,
+                proxyType: forward.proxy_type,
+                portForwardId: forward.id
+              });
+            } catch (err) {
+              console.error(`Failed to create proxy [${forward.name}]:`, err);
+            }
           }
+        } else if (forward.direction === 'reverse') {
+          console.log(`Reverse forward [${forward.name}] configured: client will listen on ${forward.local_ip}:${forward.local_port}, server will connect to ${forward.remote_ip}:${forward.remote_port}`);
         }
       }
 
@@ -636,7 +747,9 @@ class FRPServer {
         remotePort: f.remote_port,
         localIp: f.local_ip,
         localPort: f.local_port,
-        proxyType: f.proxy_type
+        proxyType: f.proxy_type,
+        direction: f.direction,
+        remoteIp: f.remote_ip
       }));
 
       socket.write(

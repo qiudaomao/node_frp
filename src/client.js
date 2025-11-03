@@ -8,6 +8,8 @@ class FRPClient {
     this.heartbeatTimer = null;
     this.connected = false;
     this.assignedProxies = []; // Store port forwards assigned by server
+    this.reverseServers = new Map(); // name -> net.Server for reverse forwards
+    this.pendingLocalConnections = new Map(); // connectionId -> { localSocket, proxyName }
   }
 
   start() {
@@ -99,6 +101,63 @@ class FRPClient {
       case 'config_update':
         this.handleConfigUpdate(msg);
         break;
+      case 'reverse_ready': {
+        const { connectionId } = msg;
+        const pending = this.pendingLocalConnections.get(connectionId);
+        if (!pending) {
+          console.error(`reverse_ready for unknown connection ${connectionId}`);
+          break;
+        }
+        // Open data socket to server and pipe to local socket
+        const dataSocket = net.createConnection(
+          this.config.serverPort,
+          this.config.serverAddr,
+          () => {
+            dataSocket.write(JSON.stringify({ type: 'data_connection', connectionId }) + '\n');
+
+            const localSocket = pending.localSocket;
+            // Pipe data between server and local client
+            dataSocket.pipe(localSocket);
+            localSocket.pipe(dataSocket);
+
+            dataSocket.on('error', (err) => {
+              console.error('Data socket error (reverse):', err.message);
+              try { localSocket.destroy(); } catch {}
+              this.pendingLocalConnections.delete(connectionId);
+            });
+            localSocket.on('error', (err) => {
+              console.error('Local socket error (reverse):', err.message);
+              try { dataSocket.destroy(); } catch {}
+              this.pendingLocalConnections.delete(connectionId);
+            });
+            dataSocket.on('end', () => {
+              try { localSocket.end(); } catch {}
+              this.pendingLocalConnections.delete(connectionId);
+            });
+            localSocket.on('end', () => {
+              try { dataSocket.end(); } catch {}
+              this.pendingLocalConnections.delete(connectionId);
+            });
+          }
+        );
+        dataSocket.on('error', (err) => {
+          console.error('Failed to establish reverse data connection:', err.message);
+          const localSocket = pending.localSocket;
+          try { localSocket.destroy(); } catch {}
+          this.pendingLocalConnections.delete(connectionId);
+        });
+        break;
+      }
+      case 'reverse_failed': {
+        const { connectionId, error } = msg;
+        const pending = this.pendingLocalConnections.get(connectionId);
+        if (pending) {
+          try { pending.localSocket.destroy(); } catch {}
+          this.pendingLocalConnections.delete(connectionId);
+        }
+        console.error(`Reverse connection failed: ${error || 'Unknown error'}`);
+        break;
+      }
       case 'heartbeat_ack':
         // Heartbeat acknowledged
         break;
@@ -116,8 +175,51 @@ class FRPClient {
         this.assignedProxies = msg.portForwards;
         console.log(`Server assigned ${this.assignedProxies.length} port forwards:`);
         this.assignedProxies.forEach(proxy => {
-          console.log(`  - ${proxy.name}: ${proxy.localIp}:${proxy.localPort} -> localhost:${proxy.remotePort} (${proxy.proxyType})`);
+          if (proxy.direction === 'reverse') {
+            console.log(`  - ${proxy.name} [reverse]: listen ${proxy.localIp}:${proxy.localPort} => ${proxy.remoteIp}:${proxy.remotePort}`);
+          } else {
+            console.log(`  - ${proxy.name} [forward]: ${proxy.localIp}:${proxy.localPort} -> localhost:${proxy.remotePort} (${proxy.proxyType})`);
+          }
         });
+
+        // Setup reverse listeners
+        const desiredReverseNames = new Set();
+        this.assignedProxies.filter(p => p.direction === 'reverse').forEach(forward => {
+          desiredReverseNames.add(forward.name);
+          if (!this.reverseServers.has(forward.name)) {
+            const server = net.createServer((localSocket) => {
+              if (!this.connected || !this.controlSocket) {
+                console.error('Control connection not ready; rejecting reverse connection');
+                try { localSocket.destroy(); } catch {}
+                return;
+              }
+              const connectionId = Math.random().toString(36).substring(7);
+              this.pendingLocalConnections.set(connectionId, { localSocket, proxyName: forward.name });
+              // Inform server to connect to target
+              this.controlSocket.write(JSON.stringify({ type: 'reverse_connection', proxyName: forward.name, connectionId }) + '\n');
+
+              // Cleanup if local closes early
+              localSocket.on('close', () => {
+                this.pendingLocalConnections.delete(connectionId);
+              });
+            });
+            server.listen(forward.localPort, forward.localIp || '127.0.0.1', () => {
+              console.log(`Reverse listener [${forward.name}] on ${forward.localIp}:${forward.localPort}`);
+            });
+            server.on('error', (err) => {
+              console.error(`Reverse listener error [${forward.name}]:`, err.message);
+            });
+            this.reverseServers.set(forward.name, server);
+          }
+        });
+        // Close any reverse servers no longer desired
+        for (const [name, srv] of this.reverseServers.entries()) {
+          if (!desiredReverseNames.has(name)) {
+            try { srv.close(); } catch {}
+            this.reverseServers.delete(name);
+            console.log(`Closed reverse listener [${name}]`);
+          }
+        }
       }
 
       this.startHeartbeat();
@@ -142,7 +244,11 @@ class FRPClient {
 
       console.log(`Configuration updated! Server assigned ${this.assignedProxies.length} port forwards:`);
       this.assignedProxies.forEach(proxy => {
-        console.log(`  - ${proxy.name}: ${proxy.localIp}:${proxy.localPort} -> localhost:${proxy.remotePort} (${proxy.proxyType})`);
+        if (proxy.direction === 'reverse') {
+          console.log(`  - ${proxy.name} [reverse]: listen ${proxy.localIp}:${proxy.localPort} => ${proxy.remoteIp}:${proxy.remotePort}`);
+        } else {
+          console.log(`  - ${proxy.name} [forward]: ${proxy.localIp}:${proxy.localPort} -> localhost:${proxy.remotePort} (${proxy.proxyType})`);
+        }
       });
 
       if (this.assignedProxies.length > oldProxies) {
@@ -151,6 +257,36 @@ class FRPClient {
         console.log(`✓ ${oldProxies - this.assignedProxies.length} port forward(s) removed`);
       } else {
         console.log(`✓ Port forward configuration updated`);
+      }
+
+      // Update reverse listeners
+      const desiredReverseNames = new Set();
+      this.assignedProxies.filter(p => p.direction === 'reverse').forEach(forward => {
+        desiredReverseNames.add(forward.name);
+        if (!this.reverseServers.has(forward.name)) {
+          const server = net.createServer((localSocket) => {
+            const connectionId = Math.random().toString(36).substring(7);
+            this.pendingLocalConnections.set(connectionId, { localSocket, proxyName: forward.name });
+            this.controlSocket.write(JSON.stringify({ type: 'reverse_connection', proxyName: forward.name, connectionId }) + '\n');
+            localSocket.on('close', () => {
+              this.pendingLocalConnections.delete(connectionId);
+            });
+          });
+          server.listen(forward.localPort, forward.localIp || '127.0.0.1', () => {
+            console.log(`Reverse listener [${forward.name}] on ${forward.localIp}:${forward.localPort}`);
+          });
+          server.on('error', (err) => {
+            console.error(`Reverse listener error [${forward.name}]:`, err.message);
+          });
+          this.reverseServers.set(forward.name, server);
+        }
+      });
+      for (const [name, srv] of this.reverseServers.entries()) {
+        if (!desiredReverseNames.has(name)) {
+          try { srv.close(); } catch {}
+          this.reverseServers.delete(name);
+          console.log(`Closed reverse listener [${name}]`);
+        }
       }
     } else {
       console.error('Received config_update without portForwards data');

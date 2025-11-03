@@ -48,21 +48,36 @@
       </div>
 
       <div class="form-group">
+        <label for="direction">Direction</label>
+        <select id="direction" name="direction">
+          <option value="forward" <%= (!portForward || portForward.direction === 'forward') ? 'selected' : '' %>>Forward (remote -> client local)</option>
+          <option value="reverse" <%= (portForward && portForward.direction === 'reverse') ? 'selected' : '' %>>Reverse (client local -> server target)</option>
+        </select>
+        <small class="form-help">Choose forward to expose client service on server's remote port. Choose reverse to accept local connections and reach a target on the server network.</small>
+      </div>
+
+      <div class="form-group">
         <label for="remote_port">Remote Port *</label>
         <input type="number" id="remote_port" name="remote_port" value="<%= portForward ? portForward.remote_port : '' %>" min="1" max="65535" required>
-        <small class="form-help">The external port that will be listened on by the server</small>
+        <small class="form-help">Forward: external port on server. Reverse: target port on server network.</small>
+      </div>
+
+      <div class="form-group">
+        <label for="remote_ip">Remote IP (server target)</label>
+        <input type="text" id="remote_ip" name="remote_ip" value="<%= portForward ? (portForward.remote_ip || '127.0.0.1') : '127.0.0.1' %>" placeholder="127.0.0.1">
+        <small class="form-help">Used for reverse direction: target host reachable from server.</small>
       </div>
 
       <div class="form-group">
         <label for="local_ip">Local IP</label>
         <input type="text" id="local_ip" name="local_ip" value="<%= portForward ? portForward.local_ip : '127.0.0.1' %>" placeholder="127.0.0.1">
-        <small class="form-help">The IP address of the target service on the client machine</small>
+        <small class="form-help">Forward: target IP on client machine. Reverse: listener IP on client.</small>
       </div>
 
       <div class="form-group">
         <label for="local_port">Local Port *</label>
         <input type="number" id="local_port" name="local_port" value="<%= portForward ? portForward.local_port : '' %>" min="1" max="65535" required>
-        <small class="form-help">The port of the target service on the client machine</small>
+        <small class="form-help">Forward: target port on client. Reverse: local listener port on client.</small>
       </div>
 
       <div class="form-group">

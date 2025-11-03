@@ -11,16 +11,20 @@ class Database {
   // Initialize database connection and create tables
   async initialize() {
     return new Promise((resolve, reject) => {
-      this.db = new sqlite3.Database(this.dbPath, (err) => {
+      this.db = new sqlite3.Database(this.dbPath, async (err) => {
         if (err) {
           console.error('Failed to connect to database:', err);
           reject(err);
           return;
         }
         console.log(`Connected to database at ${this.dbPath}`);
-        this.createTables()
-          .then(resolve)
-          .catch(reject);
+        try {
+          await this.createTables();
+          await this.migrateSchema();
+          resolve();
+        } catch (e) {
+          reject(e);
+        }
       });
     });
   }
@@ -42,10 +46,12 @@ class Database {
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         client_id INTEGER NOT NULL,
         name TEXT NOT NULL,
-        remote_port INTEGER NOT NULL UNIQUE,
+        remote_port INTEGER NOT NULL,
         local_ip TEXT NOT NULL DEFAULT '127.0.0.1',
         local_port INTEGER NOT NULL,
         proxy_type TEXT NOT NULL DEFAULT 'tcp',
+        direction TEXT NOT NULL DEFAULT 'forward',
+        remote_ip TEXT DEFAULT '127.0.0.1',
         enabled INTEGER DEFAULT 1,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -178,14 +184,14 @@ class Database {
   }
 
   // Port forward operations
-  async createPortForward(clientId, name, remotePort, localIp, localPort, proxyType = 'tcp') {
+  async createPortForward(clientId, name, remotePort, localIp, localPort, proxyType = 'tcp', direction = 'forward', remoteIp = '127.0.0.1') {
     const sql = `
-      INSERT INTO port_forwards (client_id, name, remote_port, local_ip, local_port, proxy_type)
-      VALUES (?, ?, ?, ?, ?, ?)
+      INSERT INTO port_forwards (client_id, name, remote_port, local_ip, local_port, proxy_type, direction, remote_ip)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `;
 
     return new Promise((resolve, reject) => {
-      this.db.run(sql, [clientId, name, remotePort, localIp, localPort, proxyType], function(err) {
+      this.db.run(sql, [clientId, name, remotePort, localIp, localPort, proxyType, direction, remoteIp], function(err) {
         if (err) {
           reject(err);
         } else {
@@ -196,7 +202,9 @@ class Database {
             remote_port: remotePort,
             local_ip: localIp,
             local_port: localPort,
-            proxy_type: proxyType
+            proxy_type: proxyType,
+            direction,
+            remote_ip: remoteIp
           });
         }
       });
@@ -259,7 +267,7 @@ class Database {
   }
 
   async updatePortForward(id, updates) {
-    const allowedFields = ['name', 'remote_port', 'local_ip', 'local_port', 'proxy_type', 'enabled'];
+    const allowedFields = ['name', 'remote_port', 'local_ip', 'local_port', 'proxy_type', 'direction', 'remote_ip', 'enabled'];
     const fields = [];
     const values = [];
 
@@ -300,7 +308,8 @@ class Database {
 
   // Check if remote port is available
   async isRemotePortAvailable(remotePort, excludeId = null) {
-    let sql = 'SELECT COUNT(*) as count FROM port_forwards WHERE remote_port = ? AND enabled = 1';
+    // Only enforce uniqueness for forward-direction entries (server listens on remote_port)
+    let sql = "SELECT COUNT(*) as count FROM port_forwards WHERE remote_port = ? AND enabled = 1 AND direction = 'forward'";
     const params = [remotePort];
 
     if (excludeId) {
@@ -399,6 +408,110 @@ class Database {
         else resolve(rows);
       });
     });
+  }
+
+  // Simple automatic schema migration to add new columns and relax UNIQUE(remote_port)
+  async migrateSchema() {
+    // Helper to check if a column exists
+    const columnExists = (table, column) => new Promise((resolve, reject) => {
+      this.db.all(`PRAGMA table_info(${table})`, [], (err, rows) => {
+        if (err) return reject(err);
+        resolve(rows.some(r => r.name === column));
+      });
+    });
+
+    // Add direction column if missing
+    if (!(await columnExists('port_forwards', 'direction'))) {
+      await new Promise((resolve, reject) => {
+        this.db.run("ALTER TABLE port_forwards ADD COLUMN direction TEXT NOT NULL DEFAULT 'forward'", [], (err) => {
+          if (err) return reject(err);
+          resolve();
+        });
+      });
+      console.log('Migrated: added direction column to port_forwards');
+    }
+
+    // Add remote_ip column if missing
+    if (!(await columnExists('port_forwards', 'remote_ip'))) {
+      await new Promise((resolve, reject) => {
+        this.db.run("ALTER TABLE port_forwards ADD COLUMN remote_ip TEXT DEFAULT '127.0.0.1'", [], (err) => {
+          if (err) return reject(err);
+          resolve();
+        });
+      });
+      console.log('Migrated: added remote_ip column to port_forwards');
+    }
+
+    // Ensure direction index exists
+    await new Promise((resolve, reject) => {
+      this.db.run("CREATE INDEX IF NOT EXISTS idx_port_forwards_direction ON port_forwards(direction)", [], (err) => {
+        if (err) return reject(err);
+        resolve();
+      });
+    });
+
+    // Detect UNIQUE constraint on remote_port (older schema had it)
+    // SQLite stores constraints implicitly; we can't drop it directly. We rebuild if remote_port is UNIQUE.
+    const needsRebuild = await new Promise((resolve) => {
+      this.db.all("PRAGMA index_list(port_forwards)", [], (err, rows) => {
+        if (err || !rows) return resolve(false);
+        const uniqueIdx = rows.filter(r => r.unique === 1);
+        if (uniqueIdx.length === 0) return resolve(false);
+        let checked = 0; let flag = false;
+        uniqueIdx.forEach((idx) => {
+          this.db.all(`PRAGMA index_info(${idx.name})`, [], (err2, cols) => {
+            checked++;
+            if (!err2 && cols && cols.length === 1 && cols[0].name === 'remote_port') {
+              flag = true;
+            }
+            if (checked === uniqueIdx.length) {
+              resolve(flag);
+            }
+          });
+        });
+      });
+    });
+
+    if (needsRebuild) {
+      console.log('Migrating: rebuilding port_forwards table to relax UNIQUE(remote_port)');
+      await new Promise((resolve, reject) => {
+        const rebuildSql = `
+          BEGIN TRANSACTION;
+          CREATE TABLE port_forwards_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            client_id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            remote_port INTEGER NOT NULL,
+            local_ip TEXT NOT NULL DEFAULT '127.0.0.1',
+            local_port INTEGER NOT NULL,
+            proxy_type TEXT NOT NULL DEFAULT 'tcp',
+            direction TEXT NOT NULL DEFAULT 'forward',
+            remote_ip TEXT DEFAULT '127.0.0.1',
+            enabled INTEGER DEFAULT 1,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE,
+            UNIQUE(client_id, name)
+          );
+          INSERT INTO port_forwards_new (id, client_id, name, remote_port, local_ip, local_port, proxy_type, direction, remote_ip, enabled, created_at, updated_at)
+          SELECT id, client_id, name, remote_port, local_ip, local_port, proxy_type,
+                 COALESCE(direction, 'forward'), COALESCE(remote_ip, '127.0.0.1'),
+                 enabled, created_at, updated_at
+          FROM port_forwards;
+          DROP TABLE port_forwards;
+          ALTER TABLE port_forwards_new RENAME TO port_forwards;
+          CREATE INDEX IF NOT EXISTS idx_port_forwards_client ON port_forwards(client_id);
+          CREATE INDEX IF NOT EXISTS idx_port_forwards_remote_port ON port_forwards(remote_port);
+          CREATE INDEX IF NOT EXISTS idx_port_forwards_direction ON port_forwards(direction);
+          COMMIT;
+        `;
+        this.db.exec(rebuildSql, (err) => {
+          if (err) return reject(err);
+          resolve();
+        });
+      });
+      console.log('Migration complete: port_forwards table rebuilt');
+    }
   }
 
   // Close database connection
