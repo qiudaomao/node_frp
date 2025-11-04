@@ -57,14 +57,23 @@
                 <td><%= forward.client_name %></td>
                 <td><%= (forward.direction || 'forward').toUpperCase() %></td>
                 <td>
-                  <% if ((forward.direction || 'forward') === 'reverse') { %>
+                  <% const dir = (forward.direction || 'forward'); %>
+                  <% if (dir === 'reverse') { %>
                     <%= (forward.remote_ip || '127.0.0.1') %>:<%= forward.remote_port %>
+                  <% } else if (dir === 'dynamic') { %>
+                    SOCKS5 0.0.0.0:<%= forward.remote_port %>
                   <% } else { %>
                     0.0.0.0:<%= forward.remote_port %>
                   <% } %>
                 </td>
-                <td><%= forward.local_ip %>:<%= forward.local_port %></td>
-                <td><%= forward.proxy_type.toUpperCase() %></td>
+                <td>
+                  <% if (dir === 'reverse-dynamic') { %>
+                    SOCKS5 <%= forward.local_ip %>:<%= forward.local_port %>
+                  <% } else { %>
+                    <%= forward.local_ip %>:<%= forward.local_port %>
+                  <% } %>
+                </td>
+                <td><%= (forward.proxy_type || 'tcp').toUpperCase() %></td>
                 <td>
                   <span class="status <%= forward.active ? 'status-active' : 'status-inactive' %>">
                     <%= forward.active ? 'Active' : (forward.enabled ? 'Client Offline' : 'Disabled') %>

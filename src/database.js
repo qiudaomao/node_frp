@@ -308,8 +308,8 @@ class Database {
 
   // Check if remote port is available
   async isRemotePortAvailable(remotePort, excludeId = null) {
-    // Only enforce uniqueness for forward-direction entries (server listens on remote_port)
-    let sql = "SELECT COUNT(*) as count FROM port_forwards WHERE remote_port = ? AND enabled = 1 AND direction = 'forward'";
+    // Enforce uniqueness for directions where server listens on remote_port (forward, dynamic)
+    let sql = "SELECT COUNT(*) as count FROM port_forwards WHERE remote_port = ? AND enabled = 1 AND direction IN ('forward','dynamic')";
     const params = [remotePort];
 
     if (excludeId) {

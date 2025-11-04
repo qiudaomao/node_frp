@@ -460,6 +460,79 @@ class FRPServer {
           });
         break;
       }
+      case "dynamic_ready": {
+        const { connectionId } = msg;
+        const pending = this.pendingConnections.get(connectionId);
+        if (!pending || !pending.clientSocket) {
+          console.error(`dynamic_ready for unknown or invalid connection ${connectionId}`);
+          break;
+        }
+        // SOCKS5 success reply
+        try {
+          const resp = Buffer.from([0x05, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+          pending.clientSocket.write(resp);
+        } catch (e) {
+          console.error('Error sending SOCKS5 success:', e.message);
+        }
+        break;
+      }
+      case "dynamic_failed": {
+        const { connectionId } = msg;
+        const pending = this.pendingConnections.get(connectionId);
+        if (pending && pending.clientSocket) {
+          try {
+            const resp = Buffer.from([0x05, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+            pending.clientSocket.write(resp);
+          } catch {}
+          try { pending.clientSocket.destroy(); } catch {}
+          this.pendingConnections.delete(connectionId);
+        } else {
+          console.error(`dynamic_failed for unknown connection ${connectionId}`);
+        }
+        break;
+      }
+      case "reverse_dynamic": {
+        const { proxyName, connectionId, targetHost, targetPort } = msg;
+        if (!socket.clientId) {
+          console.error('reverse_dynamic received but clientId not set');
+          return;
+        }
+        this.database.getPortForwardsByClient(socket.clientId)
+          .then(forwards => {
+            const forward = forwards.find(f => f.name === proxyName && f.direction === 'reverse-dynamic');
+            if (!forward) {
+              console.error(`Reverse-dynamic forward [${proxyName}] not found for client ${socket.clientName}`);
+              socket.write(JSON.stringify({ type: 'reverse_dynamic_failed', connectionId, error: 'Forward not found' }) + "\n");
+              return;
+            }
+            const targetSocket = net.createConnection(targetPort, targetHost, () => {
+              console.log(`Connected to server-side target ${targetHost}:${targetPort} for reverse-dynamic [${proxyName}]`);
+              this.pendingConnections.set(connectionId, {
+                targetSocket,
+                proxyName,
+                portForwardId: forward.id,
+              });
+              socket.write(JSON.stringify({ type: 'reverse_dynamic_ready', connectionId }) + "\n");
+            });
+            targetSocket.on('error', (err) => {
+              console.error(`Failed server-side target for reverse-dynamic [${proxyName}]:`, err.message);
+              socket.write(JSON.stringify({ type: 'reverse_dynamic_failed', connectionId, error: err.message }) + "\n");
+            });
+            setTimeout(() => {
+              const pending = this.pendingConnections.get(connectionId);
+              if (pending && pending.targetSocket === targetSocket) {
+                console.log(`Reverse-dynamic connection ${connectionId} timed out waiting for data socket`);
+                try { targetSocket.destroy(); } catch {}
+                this.pendingConnections.delete(connectionId);
+              }
+            }, 10000);
+          })
+          .catch(err => {
+            console.error('Database error during reverse_dynamic:', err);
+            socket.write(JSON.stringify({ type: 'reverse_dynamic_failed', connectionId, error: 'Server error' }) + "\n");
+          });
+        break;
+      }
       default:
         console.log("Unknown message type:", msg.type);
     }
@@ -478,18 +551,24 @@ class FRPServer {
         const direction = forward.direction || 'forward';
         const remote_ip = forward.remote_ip || '127.0.0.1';
         if (direction === 'forward') {
-          // Traditional forward: server listens on remote_port, forwards to client's local_ip:local_port
           await this.createProxyServer(socket, {
             name: forward.name,
             remotePort: forward.remote_port,
             proxyType: forward.proxy_type,
             portForwardId: forward.id,
-            direction
           });
+        } else if (direction === 'dynamic') {
+          await this.createProxyServer(socket, {
+            name: forward.name,
+            remotePort: forward.remote_port,
+            proxyType: 'socks5',
+            portForwardId: forward.id,
+          });
+          console.log(`Dynamic SOCKS5 [${forward.name}] listening on ${forward.remote_port}`);
         } else if (direction === 'reverse') {
-          // Reverse forward: client will listen on local_port, server connects to remote_ip:remote_port
-          // No proxy server needed on server side for reverse forwards
           console.log(`Reverse forward [${forward.name}] configured: client will listen on ${forward.local_ip}:${forward.local_port}, server will connect to ${remote_ip}:${forward.remote_port}`);
+        } else if (direction === 'reverse-dynamic') {
+          console.log(`Reverse-Dynamic SOCKS5 [${forward.name}] configured: client will listen on ${forward.local_ip}:${forward.local_port} (SOCKS5)`);
         }
       }
     } catch (err) {
@@ -506,7 +585,11 @@ class FRPServer {
 
     // Create proxy server for this remote port
     const proxyServer = net.createServer((clientSocket) => {
-      this.handleProxyConnection(controlSocket, clientSocket, name, portForwardId);
+      if (proxyType === 'socks5') {
+        this.handleSocks5ForwardConnection(controlSocket, clientSocket, name, portForwardId);
+      } else {
+        this.handleProxyConnection(controlSocket, clientSocket, name, portForwardId);
+      }
     });
 
     return new Promise((resolve, reject) => {
@@ -532,6 +615,108 @@ class FRPServer {
         console.error(`Proxy [${name}] error:`, err);
         reject(err);
       });
+    });
+  }
+
+  // SOCKS5 handshake + dynamic forward: external client speaks SOCKS to server; server instructs client to connect to target
+  handleSocks5ForwardConnection(controlSocket, clientSocket, proxyName, portForwardId) {
+    let buf = Buffer.alloc(0);
+    let stage = 'greet';
+    let connectionId = null;
+
+    const onData = (data) => {
+      buf = Buffer.concat([buf, data]);
+      try {
+        if (stage === 'greet') {
+          if (buf.length < 2) return;
+          const ver = buf[0];
+          const nmethods = buf[1];
+          const need = 2 + nmethods;
+          if (ver !== 0x05) {
+            clientSocket.destroy();
+            return;
+          }
+          if (buf.length < need) return; // wait more
+          // consume
+          buf = buf.slice(need);
+          // reply: no auth
+          clientSocket.write(Buffer.from([0x05, 0x00]));
+          stage = 'request';
+        }
+        if (stage === 'request') {
+          if (buf.length < 4) return;
+          const ver2 = buf[0];
+          const cmd = buf[1];
+          const atyp = buf[3];
+          if (ver2 !== 0x05) { clientSocket.destroy(); return; }
+          if (cmd !== 0x01) {
+            clientSocket.write(Buffer.from([0x05, 0x07, 0x00, 0x01, 0,0,0,0, 0,0]));
+            clientSocket.destroy();
+            return;
+          }
+          let addr = '';
+          let port = 0;
+          let offset = 4;
+          if (atyp === 0x01) { // IPv4
+            if (buf.length < offset + 4 + 2) return;
+            addr = `${buf[offset]}.${buf[offset+1]}.${buf[offset+2]}.${buf[offset+3]}`;
+            offset += 4;
+          } else if (atyp === 0x03) { // domain
+            if (buf.length < offset + 1) return;
+            const len = buf[offset];
+            if (buf.length < offset + 1 + len + 2) return;
+            addr = buf.slice(offset + 1, offset + 1 + len).toString('utf8');
+            offset += 1 + len;
+          } else if (atyp === 0x04) { // IPv6
+            if (buf.length < offset + 16 + 2) return;
+            const a = [];
+            for (let i = 0; i < 16; i+=2) {
+              a.push(buf.slice(offset+i, offset+i+2).toString('hex'));
+            }
+            addr = a.join(':');
+            offset += 16;
+          } else {
+            clientSocket.write(Buffer.from([0x05, 0x08, 0x00, 0x01, 0,0,0,0, 0,0]));
+            clientSocket.destroy();
+            return;
+          }
+          port = (buf[offset] << 8) + buf[offset+1];
+          buf = buf.slice(offset + 2);
+
+          // Ask client to connect to target; data path established upon data_connection
+          connectionId = Math.random().toString(36).substring(7);
+          this.pendingConnections.set(connectionId, {
+            clientSocket,
+            proxyName,
+            portForwardId,
+          });
+          controlSocket.write(
+            JSON.stringify({ type: 'dynamic_connection', proxyName, connectionId, targetHost: addr, targetPort: port }) + "\n"
+          );
+
+          setTimeout(() => {
+            const pending = this.pendingConnections.get(connectionId);
+            if (pending && pending.clientSocket === clientSocket) {
+              console.log(`Dynamic connection ${connectionId} timed out`);
+              try { clientSocket.destroy(); } catch {}
+              this.pendingConnections.delete(connectionId);
+            }
+          }, 10000);
+
+          stage = 'wait';
+        }
+      } catch (e) {
+        console.error('SOCKS5 handshake error:', e.message);
+        try { clientSocket.destroy(); } catch {}
+      }
+    };
+
+    clientSocket.on('data', onData);
+    clientSocket.on('error', () => {
+      // cleanup pending if any
+    });
+    clientSocket.on('close', () => {
+      // cleanup pending if any
     });
   }
 

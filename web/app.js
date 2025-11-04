@@ -250,7 +250,7 @@ app.get('/port-forwards/new', requireAuth, async (req, res) => {
 
 app.post('/port-forwards/new', requireAuth, async (req, res) => {
   try {
-    const { client_id, name, remote_port, local_ip, local_port, proxy_type } = req.body;
+    const { client_id, name, remote_port, local_ip, local_port, proxy_type, direction, remote_ip } = req.body;
 
     // Check if remote port is available
     const available = await db.isRemotePortAvailable(remote_port);
@@ -261,10 +261,12 @@ app.post('/port-forwards/new', requireAuth, async (req, res) => {
     await db.createPortForward(
       client_id,
       name,
-      parseInt(remote_port),
+      parseInt(remote_port || 0),
       local_ip || '127.0.0.1',
-      parseInt(local_port),
-      proxy_type || 'tcp'
+      parseInt(local_port || 0),
+      proxy_type || 'tcp',
+      direction || 'forward',
+      remote_ip || '127.0.0.1'
     );
 
     // Trigger dynamic reload for connected client
@@ -302,7 +304,7 @@ app.get('/port-forwards/:id/edit', requireAuth, async (req, res) => {
 
 app.post('/port-forwards/:id/edit', requireAuth, async (req, res) => {
   try {
-    const { name, remote_port, local_ip, local_port, proxy_type, enabled } = req.body;
+    const { name, remote_port, local_ip, local_port, proxy_type, enabled, direction, remote_ip } = req.body;
 
     // Check if remote port is available (excluding current record)
     const available = await db.isRemotePortAvailable(remote_port, req.params.id);
@@ -315,11 +317,13 @@ app.post('/port-forwards/:id/edit', requireAuth, async (req, res) => {
 
     await db.updatePortForward(req.params.id, {
       name,
-      remote_port: parseInt(remote_port),
+      remote_port: remote_port ? parseInt(remote_port) : 0,
       local_ip: local_ip || '127.0.0.1',
-      local_port: parseInt(local_port),
+      local_port: local_port ? parseInt(local_port) : 0,
       proxy_type: proxy_type || 'tcp',
-      enabled: enabled ? 1 : 0
+      enabled: enabled ? 1 : 0,
+      direction: direction || 'forward',
+      remote_ip: remote_ip || '127.0.0.1'
     });
 
     // Trigger dynamic reload for connected client
@@ -416,7 +420,7 @@ app.get('/api/port-forwards/:id', requireAuth, async (req, res) => {
 
 app.post('/api/port-forwards', requireAuth, async (req, res) => {
   try {
-    const { client_id, name, remote_port, local_ip, local_port, proxy_type } = req.body;
+    const { client_id, name, remote_port, local_ip, local_port, proxy_type, direction, remote_ip } = req.body;
 
     const available = await db.isRemotePortAvailable(remote_port);
     if (!available) {
@@ -426,10 +430,12 @@ app.post('/api/port-forwards', requireAuth, async (req, res) => {
     const portForward = await db.createPortForward(
       client_id,
       name,
-      parseInt(remote_port),
+      parseInt(remote_port || 0),
       local_ip || '127.0.0.1',
-      parseInt(local_port),
-      proxy_type || 'tcp'
+      parseInt(local_port || 0),
+      proxy_type || 'tcp',
+      direction || 'forward',
+      remote_ip || '127.0.0.1'
     );
 
     // Trigger dynamic reload for connected client
@@ -480,6 +486,21 @@ app.delete('/api/port-forwards/:id', requireAuth, async (req, res) => {
     }
 
     res.json({ success: true });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// Toggle endpoint for enable/disable from UI
+app.put('/api/port-forwards/:id/toggle', requireAuth, async (req, res) => {
+  try {
+    const current = await db.getPortForward(req.params.id);
+    if (!current) return res.status(404).json({ error: 'Not found' });
+    const updatedEnabled = current.enabled ? 0 : 1;
+    await db.updatePortForward(req.params.id, { enabled: updatedEnabled });
+    await reloadClientPortForwards(current.client_id);
+    const refreshed = await db.getPortForward(req.params.id);
+    res.json(refreshed);
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
