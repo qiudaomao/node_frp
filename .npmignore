@@ -1,0 +1,7 @@
+node_modules/
+.git/
+.env
+*.log
+test/
+.DS_Store
+CLAUDE.md

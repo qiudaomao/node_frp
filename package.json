@@ -1,5 +1,5 @@
 {
-  "name": "node-frp",
+  "name": "@qiudaomao/node-frp",
   "version": "1.0.0",
   "description": "A Node.js implementation of Fast Reverse Proxy (FRP) for TCP port forwarding",
   "main": "src/index.js",
@@ -18,7 +18,7 @@
     "tcp",
     "tunnel"
   ],
-  "author": "",
+  "author": "qiudaomao",
   "license": "MIT",
   "dependencies": {
     "js-yaml": "^4.1.0",
@@ -30,5 +30,9 @@
     "sqlite3": "^5.1.6",
     "express-rate-limit": "^7.1.5",
     "body-parser": "^1.20.2"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/qiudaomao/node_frp.git"
   }
 }
