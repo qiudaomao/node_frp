@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 const FRPServer = require('./server');
 const FRPClient = require('./client');
 const ConfigLoader = require('./config');
