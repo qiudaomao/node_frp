@@ -303,7 +303,13 @@ class FRPServer {
       if (pendingConn.clientSocket) {
         // Pipe any remaining buffered data
         if (remainingBuffer.length > 0) {
+          // Any extra bytes sent on the data socket after handshake go towards the client
           pendingConn.clientSocket.write(remainingBuffer);
+        }
+        // Flush any client data that arrived after SOCKS request while waiting for data socket
+        if (pendingConn.clientPreData && pendingConn.clientPreData.length > 0) {
+          try { socket.write(pendingConn.clientPreData); } catch {}
+          pendingConn.clientPreData = Buffer.alloc(0);
         }
 
         // Wrap socket to track traffic
@@ -324,6 +330,14 @@ class FRPServer {
           }
           return originalClientWrite(data);
         };
+
+        // Stop intercepting data on client socket; switch to raw piping
+        try {
+          if (pendingConn.clientOnData) {
+            pendingConn.clientSocket.removeListener('data', pendingConn.clientOnData);
+            pendingConn.clientOnData = null;
+          }
+        } catch {}
 
         // Pipe the connections together
         pendingConn.clientSocket.pipe(socket);
@@ -641,6 +655,8 @@ class FRPServer {
     let buf = Buffer.alloc(0);
     let stage = 'greet';
     let connectionId = null;
+    // Buffer for any client data arriving after SOCKS request while we wait for data connection
+    let clientPreData = Buffer.alloc(0);
 
     const onData = (data) => {
       buf = Buffer.concat([buf, data]);
@@ -707,6 +723,10 @@ class FRPServer {
             clientSocket,
             proxyName,
             portForwardId,
+            // Store any early client data to forward once data socket is ready
+            clientPreData,
+            // Save reference to this data handler so we can remove it once piping is established
+            clientOnData: onData,
           });
           controlSocket.write(
             JSON.stringify({ type: 'dynamic_connection', proxyName, connectionId, targetHost: addr, targetPort: port }) + "\n"
@@ -725,6 +745,17 @@ class FRPServer {
           if (p) p.timer = timer;
 
           stage = 'wait';
+        }
+        // While waiting for data connection, accumulate any client payload
+        if (stage === 'wait') {
+          if (buf.length > 0 && connectionId) {
+            const pending = this.pendingConnections.get(connectionId);
+            if (pending) {
+              // Append and clear local buffer
+              pending.clientPreData = Buffer.concat([pending.clientPreData || Buffer.alloc(0), buf]);
+              buf = Buffer.alloc(0);
+            }
+          }
         }
       } catch (e) {
         console.error('SOCKS5 handshake error:', e.message);
