@@ -1,5 +1,9 @@
 const net = require('net');
 
+function genConnectionId() {
+  return Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
+}
+
 class FRPClient {
   constructor(config) {
     this.config = config;
@@ -175,8 +179,12 @@ class FRPClient {
             });
             targetSocket.on('error', (err) => {
               console.error('Client failed to connect target for dynamic:', err.message);
-              try { dataSocket.destroy(); } catch {}
-              this.controlSocket.write(JSON.stringify({ type: 'dynamic_failed', connectionId, error: err.message }) + '\n');
+              // Still notify server about failure. Ensure data socket closes after sending the message
+              try {
+                this.controlSocket.write(JSON.stringify({ type: 'dynamic_failed', connectionId, error: err.message }) + '\n');
+              } finally {
+                try { dataSocket.destroy(); } catch {}
+              }
             });
           }
         );
@@ -265,7 +273,7 @@ class FRPClient {
                 try { localSocket.destroy(); } catch {}
                 return;
               }
-              const connectionId = Math.random().toString(36).substring(7);
+              const connectionId = genConnectionId();
               this.pendingLocalConnections.set(connectionId, { localSocket, proxyName: forward.name });
               // Inform server to connect to target
               this.controlSocket.write(JSON.stringify({ type: 'reverse_connection', proxyName: forward.name, connectionId }) + '\n');
@@ -329,7 +337,7 @@ class FRPClient {
                   }
                   port = (buf[offset] << 8) + buf[offset+1];
                   buf = buf.slice(offset + 2);
-                  connectionId = Math.random().toString(36).substring(7);
+                  connectionId = genConnectionId();
                   this.pendingLocalConnections.set(connectionId, { localSocket, proxyName: forward.name });
                   this.controlSocket.write(JSON.stringify({ type: 'reverse_dynamic', proxyName: forward.name, connectionId, targetHost: addr, targetPort: port }) + '\n');
                   stage = 'wait';
@@ -413,7 +421,7 @@ class FRPClient {
         desiredReverseNames.add(forward.name);
         if (!this.reverseServers.has(forward.name)) {
           const server = net.createServer((localSocket) => {
-            const connectionId = Math.random().toString(36).substring(7);
+            const connectionId = genConnectionId();
             this.pendingLocalConnections.set(connectionId, { localSocket, proxyName: forward.name });
             this.controlSocket.write(JSON.stringify({ type: 'reverse_connection', proxyName: forward.name, connectionId }) + '\n');
             localSocket.on('close', () => {
@@ -470,7 +478,7 @@ class FRPClient {
                 } else { try { localSocket.destroy(); } catch {}; return; }
                 port = (buf[offset] << 8) + buf[offset+1];
                 buf = buf.slice(offset + 2);
-                connectionId = Math.random().toString(36).substring(7);
+                connectionId = genConnectionId();
                 this.pendingLocalConnections.set(connectionId, { localSocket, proxyName: forward.name });
                 this.controlSocket.write(JSON.stringify({ type: 'reverse_dynamic', proxyName: forward.name, connectionId, targetHost: addr, targetPort: port }) + '\n');
                 stage = 'wait';

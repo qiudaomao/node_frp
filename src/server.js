@@ -1,4 +1,9 @@
 const net = require("net");
+
+function genConnectionId() {
+  // Low-collision ID: time + random segment
+  return Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
+}
 const Database = require('./database');
 const WebUIServer = require('./webui');
 
@@ -718,7 +723,7 @@ class FRPServer {
           buf = buf.slice(offset + 2);
 
           // Ask client to connect to target; data path established upon data_connection
-          connectionId = Math.random().toString(36).substring(7);
+          connectionId = genConnectionId();
           this.pendingConnections.set(connectionId, {
             clientSocket,
             proxyName,
@@ -727,6 +732,7 @@ class FRPServer {
             clientPreData,
             // Save reference to this data handler so we can remove it once piping is established
             clientOnData: onData,
+            ownerClientId: controlSocket.clientId,
           });
           controlSocket.write(
             JSON.stringify({ type: 'dynamic_connection', proxyName, connectionId, targetHost: addr, targetPort: port }) + "\n"
@@ -740,7 +746,7 @@ class FRPServer {
               try { clientSocket.destroy(); } catch {}
               this.pendingConnections.delete(connectionId);
             }
-          }, 10000);
+          }, this.config.dynamicTimeoutMs || 15000);
           const p = this.pendingConnections.get(connectionId);
           if (p) p.timer = timer;
 
@@ -764,16 +770,21 @@ class FRPServer {
     };
 
     clientSocket.on('data', onData);
-    clientSocket.on('error', () => {
-      // cleanup pending if any
-    });
-    clientSocket.on('close', () => {
-      // cleanup pending if any
-    });
+    const cleanupPending = () => {
+      if (connectionId) {
+        const pending = this.pendingConnections.get(connectionId);
+        if (pending && pending.clientSocket === clientSocket) {
+          if (pending.timer) { try { clearTimeout(pending.timer); } catch {} }
+          this.pendingConnections.delete(connectionId);
+        }
+      }
+    };
+    clientSocket.on('error', cleanupPending);
+    clientSocket.on('close', cleanupPending);
   }
 
   handleProxyConnection(controlSocket, clientSocket, proxyName, portForwardId) {
-    const connectionId = Math.random().toString(36).substring(7);
+    const connectionId = genConnectionId();
 
     console.log(`New connection to proxy [${proxyName}], id: ${connectionId}`);
 
@@ -801,7 +812,7 @@ class FRPServer {
         this.pendingConnections.delete(connectionId);
         try { clientSocket.destroy(); } catch {}
       }
-    }, 10000);
+    }, this.config.dynamicTimeoutMs || 15000);
     const p = this.pendingConnections.get(connectionId);
     if (p) p.timer = timer;
   }
@@ -830,12 +841,19 @@ class FRPServer {
       this.clientSockets.delete(socket.clientId);
     }
 
-    // Clean up any pending connections for this client
-    for (const [connectionId, pending] of this.pendingConnections.entries()) {
-      if (pending.clientSocket && pending.clientSocket.destroyed === false) {
-        pending.clientSocket.destroy();
+    // Clean up any pending connections owned by this client
+    if (socket.clientId) {
+      for (const [connectionId, pending] of this.pendingConnections.entries()) {
+        if (pending.ownerClientId === socket.clientId) {
+          if (pending.clientSocket && pending.clientSocket.destroyed === false) {
+            try { pending.clientSocket.destroy(); } catch {}
+          }
+          if (pending.targetSocket && pending.targetSocket.destroyed === false) {
+            try { pending.targetSocket.destroy(); } catch {}
+          }
+          this.pendingConnections.delete(connectionId);
+        }
       }
-      this.pendingConnections.delete(connectionId);
     }
   }
 
