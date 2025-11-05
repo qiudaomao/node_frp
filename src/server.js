@@ -288,8 +288,6 @@ class FRPServer {
     if (pendingConn) {
       console.log(`Data connection established for ${connectionId}`);
 
-      this.pendingConnections.delete(connectionId);
-
       const portForwardId = pendingConn.portForwardId;
       const self = this; // Capture 'this' reference
 
@@ -324,6 +322,13 @@ class FRPServer {
         // Pipe the connections together
         pendingConn.clientSocket.pipe(socket);
         socket.pipe(pendingConn.clientSocket);
+
+        // Cleanup mapping when either side closes
+        const cleanup = () => {
+          this.pendingConnections.delete(connectionId);
+        };
+        pendingConn.clientSocket.on('close', cleanup);
+        socket.on('close', cleanup);
 
         pendingConn.clientSocket.on("error", () => {
           socket.destroy();
@@ -364,6 +369,13 @@ class FRPServer {
         // Pipe the connections
         socket.pipe(targetSocket);
         targetSocket.pipe(socket);
+
+        // Cleanup mapping when either side closes
+        const cleanup = () => {
+          this.pendingConnections.delete(connectionId);
+        };
+        targetSocket.on('close', cleanup);
+        socket.on('close', cleanup);
 
         // Errors/cleanup
         targetSocket.on('error', () => {
@@ -919,6 +931,20 @@ class FRPServer {
               });
             } catch (err) {
               console.error(`Failed to create proxy [${forward.name}]:`, err);
+            }
+          }
+        } else if (forward.direction === 'dynamic') {
+          if (!this.proxyServers.has(forward.remote_port)) {
+            try {
+              await this.createProxyServer(socket, {
+                name: forward.name,
+                remotePort: forward.remote_port,
+                proxyType: 'socks5',
+                portForwardId: forward.id
+              });
+              console.log(`Dynamic SOCKS5 [${forward.name}] listening on ${forward.remote_port}`);
+            } catch (err) {
+              console.error(`Failed to create dynamic SOCKS5 [${forward.name}]:`, err);
             }
           }
         } else if (forward.direction === 'reverse') {
