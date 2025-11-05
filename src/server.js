@@ -291,6 +291,12 @@ class FRPServer {
       const portForwardId = pendingConn.portForwardId;
       const self = this; // Capture 'this' reference
 
+      // Clear any pending timeout for this connection
+      if (pendingConn.timer) {
+        try { clearTimeout(pendingConn.timer); } catch {}
+        pendingConn.timer = null;
+      }
+
       // Two modes:
       // 1) forward mode: pendingConn.clientSocket is a socket from external client to server proxy
       // 2) reverse mode: pendingConn.targetSocket is a socket from server to target on server network
@@ -706,7 +712,8 @@ class FRPServer {
             JSON.stringify({ type: 'dynamic_connection', proxyName, connectionId, targetHost: addr, targetPort: port }) + "\n"
           );
 
-          setTimeout(() => {
+          // Timeout for dynamic connection; store timer so it can be cleared on data connection
+          const timer = setTimeout(() => {
             const pending = this.pendingConnections.get(connectionId);
             if (pending && pending.clientSocket === clientSocket) {
               console.log(`Dynamic connection ${connectionId} timed out`);
@@ -714,6 +721,8 @@ class FRPServer {
               this.pendingConnections.delete(connectionId);
             }
           }, 10000);
+          const p = this.pendingConnections.get(connectionId);
+          if (p) p.timer = timer;
 
           stage = 'wait';
         }
@@ -753,14 +762,17 @@ class FRPServer {
       }) + "\n",
     );
 
-    // Cleanup on timeout
-    setTimeout(() => {
-      if (this.pendingConnections.has(connectionId)) {
+    // Cleanup on timeout; store timer so it can be cleared on data connection
+    const timer = setTimeout(() => {
+      const pending = this.pendingConnections.get(connectionId);
+      if (pending && pending.clientSocket === clientSocket) {
         console.log(`Connection ${connectionId} timed out`);
         this.pendingConnections.delete(connectionId);
-        clientSocket.destroy();
+        try { clientSocket.destroy(); } catch {}
       }
     }, 10000);
+    const p = this.pendingConnections.get(connectionId);
+    if (p) p.timer = timer;
   }
 
   cleanupClient(socket) {
