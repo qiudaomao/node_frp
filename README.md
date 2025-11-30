@@ -1,6 +1,6 @@
 # Node FRP
 
-A Node.js implementation of Fast Reverse Proxy (FRP) for TCP port forwarding with web-based administration.
+A Node.js implementation of Fast Reverse Proxy (FRP) for TCP/UDP port forwarding with web-based administration.
 
 ## Features
 
