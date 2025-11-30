@@ -18,7 +18,7 @@ A Node.js implementation of Fast Reverse Proxy (FRP) for TCP port forwarding wit
 ## Installation
 
 ```bash
-npm install
+npm install @qiudaomao/node-frp
 ```
 
 ## Configuration
@@ -60,6 +60,10 @@ token: "your-client-token"
 ### Start Server
 
 ```bash
+node-frp server
+node-frp server <frps.yaml>
+
+# run from source
 node src/cli.js server
 # or with custom config
 node src/cli.js server custom-server.yaml
@@ -70,6 +74,10 @@ The server will automatically start the web UI at http://localhost:8080 (if enab
 ### Start Client
 
 ```bash
+node-frp client
+node-frp client <frpc.yaml>
+
+# run from source
 node src/cli.js client
 # or with custom config
 node src/cli.js client custom-client.yaml
