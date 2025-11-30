@@ -16,6 +16,11 @@ A Node.js implementation of Fast Reverse Proxy (FRP) for TCP/UDP port forwarding
 - **Enable/disable toggles** - Quick control over port forwards without editing
 - **REST API** - Programmatic access to all management functions
 
+## WebUI management
+![](./assets/dashboard.png)
+![](./assets/clients_and_ports.png)
+
+
 ## Installation
 
 ```bash

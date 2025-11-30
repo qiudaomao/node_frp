@@ -3,3 +3,4 @@ package-lock.json
 frp.db
 CLAUDE.md
 *.tgz
+.DS_Store
