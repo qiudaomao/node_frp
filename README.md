@@ -18,7 +18,7 @@ A Node.js implementation of Fast Reverse Proxy (FRP) for TCP port forwarding wit
 ## Installation
 
 ```bash
-npm install @qiudaomao/node-frp
+npm install -g @qiudaomao/node-frp
 ```
 
 ## Configuration
