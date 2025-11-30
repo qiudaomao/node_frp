@@ -1,6 +1,6 @@
 {
   "name": "@qiudaomao/node-frp",
-  "version": "1.1.4",
+  "version": "1.1.5",
   "description": "A Node.js implementation of Fast Reverse Proxy (FRP) for TCP port forwarding",
   "main": "src/index.js",
   "bin": {
