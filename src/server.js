@@ -37,6 +37,7 @@ class FRPServer {
 
     // Start FRP control server
     this.controlServer = net.createServer((socket) => {
+      socket.setNoDelay(true);
       this.handleControlConnection(socket);
     });
 
@@ -476,6 +477,8 @@ class FRPServer {
               socket.write(JSON.stringify({ type: 'reverse_ready', connectionId }) + "\n");
             });
 
+            targetSocket.setNoDelay(true);
+
             targetSocket.on('error', (err) => {
               console.error(`Failed to connect target for reverse [${proxyName}]:`, err.message);
               socket.write(JSON.stringify({ type: 'reverse_failed', connectionId, error: err.message }) + "\n");
@@ -551,6 +554,8 @@ class FRPServer {
               });
               socket.write(JSON.stringify({ type: 'reverse_dynamic_ready', connectionId }) + "\n");
             });
+
+            targetSocket.setNoDelay(true);
             targetSocket.on('error', (err) => {
               console.error(`Failed server-side target for reverse-dynamic [${proxyName}]:`, err.message);
               socket.write(JSON.stringify({ type: 'reverse_dynamic_failed', connectionId, error: err.message }) + "\n");
@@ -622,6 +627,7 @@ class FRPServer {
 
     // Create proxy server for this remote port
     const proxyServer = net.createServer((clientSocket) => {
+      clientSocket.setNoDelay(true);
       if (proxyType === 'socks5') {
         this.handleSocks5ForwardConnection(controlSocket, clientSocket, name, portForwardId);
       } else {

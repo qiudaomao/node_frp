@@ -43,6 +43,8 @@ class FRPClient {
       this.controlSocket.write(JSON.stringify(handshake) + '\n');
     });
 
+    this.controlSocket.setNoDelay(true);
+
     let buffer = '';
 
     this.controlSocket.on('data', (data) => {
@@ -145,6 +147,7 @@ class FRPClient {
             });
           }
         );
+        dataSocket.setNoDelay(true);
         dataSocket.on('error', (err) => {
           console.error('Failed to establish reverse data connection:', err.message);
           const localSocket = pending.localSocket;
@@ -177,6 +180,7 @@ class FRPClient {
               targetSocket.pipe(dataSocket);
               this.controlSocket.write(JSON.stringify({ type: 'dynamic_ready', connectionId }) + '\n');
             });
+            targetSocket.setNoDelay(true);
             targetSocket.on('error', (err) => {
               console.error('Client failed to connect target for dynamic:', err.message);
               // Still notify server about failure. Ensure data socket closes after sending the message
@@ -188,6 +192,7 @@ class FRPClient {
             });
           }
         );
+        dataSocket.setNoDelay(true);
         dataSocket.on('error', (err) => {
           console.error('Failed to establish data socket for dynamic:', err.message);
         });
@@ -211,6 +216,7 @@ class FRPClient {
           dataSocket.pipe(localSocket);
           localSocket.pipe(dataSocket);
         });
+        dataSocket.setNoDelay(true);
         dataSocket.on('error', (err) => {
           console.error('Data socket error (reverse-dynamic):', err.message);
           const localSocket = pending.localSocket;
@@ -268,6 +274,7 @@ class FRPClient {
           desiredReverseNames.add(forward.name);
           if (!this.reverseServers.has(forward.name)) {
             const server = net.createServer((localSocket) => {
+              localSocket.setNoDelay(true);
               if (!this.connected || !this.controlSocket) {
                 console.error('Control connection not ready; rejecting reverse connection');
                 try { localSocket.destroy(); } catch {}
@@ -297,6 +304,7 @@ class FRPClient {
           desiredReverseNames.add(forward.name);
           if (!this.socksServers.has(forward.name)) {
             const server = net.createServer((localSocket) => {
+              localSocket.setNoDelay(true);
               // Minimal SOCKS5 greet/request to extract target, then ask server to connect
               let buf = Buffer.alloc(0);
               let stage = 'greet';
@@ -421,6 +429,7 @@ class FRPClient {
         desiredReverseNames.add(forward.name);
         if (!this.reverseServers.has(forward.name)) {
           const server = net.createServer((localSocket) => {
+            localSocket.setNoDelay(true);
             const connectionId = genConnectionId();
             this.pendingLocalConnections.set(connectionId, { localSocket, proxyName: forward.name });
             this.controlSocket.write(JSON.stringify({ type: 'reverse_connection', proxyName: forward.name, connectionId }) + '\n');
@@ -441,6 +450,7 @@ class FRPClient {
         desiredReverseNames.add(forward.name);
         if (!this.socksServers.has(forward.name)) {
           const server = net.createServer((localSocket) => {
+            localSocket.setNoDelay(true);
             let buf = Buffer.alloc(0);
             let stage = 'greet';
             let connectionId = null;
@@ -570,12 +580,16 @@ class FRPClient {
           }
         );
 
+        localSocket.setNoDelay(true);
+
         localSocket.on('error', (err) => {
           console.error(`Failed to connect to local service: ${err.message}`);
           dataSocket.destroy();
         });
       }
     );
+
+    dataSocket.setNoDelay(true);
 
     dataSocket.on('error', (err) => {
       console.error('Failed to establish data connection:', err.message);
