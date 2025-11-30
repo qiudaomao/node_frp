@@ -1,4 +1,5 @@
 const net = require('net');
+const dgram = require('dgram');
 
 function genConnectionId() {
   return Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
@@ -15,6 +16,7 @@ class FRPClient {
     this.reverseServers = new Map(); // name -> net.Server for reverse forwards
     this.pendingLocalConnections = new Map(); // connectionId -> { localSocket, proxyName }
     this.socksServers = new Map(); // name -> net.Server for reverse-dynamic SOCKS5
+    this.udpSessions = new Map(); // connectionId -> { socket, targetHost, targetPort }
   }
 
   start() {
@@ -239,6 +241,14 @@ class FRPClient {
         console.error(`Reverse-dynamic connection failed: ${error || 'Unknown error'}`);
         break;
       }
+      case 'udp_packet':
+        this.handleUdpPacket(msg);
+        break;
+      case 'udp_close':
+        if (msg.connectionId) {
+          this.closeUdpSession(msg.connectionId, false);
+        }
+        break;
       case 'heartbeat_ack':
         // Heartbeat acknowledged
         break;
@@ -596,6 +606,87 @@ class FRPClient {
     });
   }
 
+  handleUdpPacket(msg) {
+    const { connectionId, data, targetHost, targetPort, proxyName } = msg;
+    if (!connectionId || !data) {
+      return;
+    }
+
+    let session = this.udpSessions.get(connectionId);
+    if (!session) {
+      if (!targetHost || !targetPort) {
+        console.error(`Missing target information for UDP proxy [${proxyName || 'unknown'}]`);
+        return;
+      }
+      const socketType = targetHost && targetHost.includes(':') ? 'udp6' : 'udp4';
+      const socket = dgram.createSocket(socketType);
+      socket.on('message', (packet) => {
+        this.sendUdpResponse(connectionId, packet);
+      });
+      socket.on('error', (err) => {
+        console.error(`UDP session error [${proxyName || connectionId}]:`, err.message);
+        this.closeUdpSession(connectionId, true);
+      });
+      session = {
+        socket,
+        targetHost,
+        targetPort,
+        proxyName,
+      };
+      this.udpSessions.set(connectionId, session);
+    }
+
+    try {
+      const payload = Buffer.from(data, 'base64');
+      session.socket.send(payload, session.targetPort, session.targetHost, (err) => {
+        if (err) {
+          console.error(`Failed to send UDP payload for ${proxyName || connectionId}:`, err.message);
+        }
+      });
+    } catch (err) {
+      console.error('Failed to process udp_packet:', err.message);
+    }
+  }
+
+  sendUdpResponse(connectionId, packet) {
+    if (!this.controlSocket || this.controlSocket.destroyed) {
+      return;
+    }
+    try {
+      this.controlSocket.write(
+        JSON.stringify({
+          type: 'udp_packet_response',
+          connectionId,
+          data: packet.toString('base64'),
+        }) + '\n'
+      );
+    } catch (err) {
+      console.error('Failed to send UDP response to server:', err.message);
+    }
+  }
+
+  closeUdpSession(connectionId, notifyServer = false) {
+    const session = this.udpSessions.get(connectionId);
+    if (!session) {
+      return;
+    }
+    this.udpSessions.delete(connectionId);
+    try {
+      session.socket.close();
+    } catch {}
+    if (notifyServer && this.controlSocket && !this.controlSocket.destroyed) {
+      try {
+        this.controlSocket.write(JSON.stringify({ type: 'udp_close', connectionId }) + '\n');
+      } catch {}
+    }
+  }
+
+  cleanupUdpSessions() {
+    for (const connectionId of this.udpSessions.keys()) {
+      this.closeUdpSession(connectionId, false);
+    }
+  }
+
   startHeartbeat() {
     if (this.heartbeatTimer) {
       clearInterval(this.heartbeatTimer);
@@ -610,6 +701,8 @@ class FRPClient {
 
   handleDisconnect() {
     this.connected = false;
+
+    this.cleanupUdpSessions();
 
     if (this.heartbeatTimer) {
       clearInterval(this.heartbeatTimer);
@@ -636,6 +729,8 @@ class FRPClient {
     if (this.heartbeatTimer) {
       clearInterval(this.heartbeatTimer);
     }
+
+    this.cleanupUdpSessions();
 
     if (this.controlSocket) {
       this.controlSocket.end();

@@ -1,4 +1,11 @@
 const net = require("net");
+const dgram = require("dgram");
+
+const VALID_PROXY_TYPES = new Set(['tcp', 'udp', 'socks5']);
+function normalizeProxyType(type) {
+  const normalized = (type || 'tcp').toString().trim().toLowerCase();
+  return VALID_PROXY_TYPES.has(normalized) ? normalized : 'tcp';
+}
 
 function genConnectionId() {
   // Low-collision ID: time + random segment
@@ -16,6 +23,8 @@ class FRPServer {
     this.clients = new Map(); // Maps socket -> [ports]
     this.clientSockets = new Map(); // Maps clientId -> socket
     this.pendingConnections = new Map();
+    this.udpSessions = new Map(); // connectionId -> session info
+    this.udpRemoteMap = new Map(); // remoteKey -> connectionId
     this.database = new Database(config.databasePath || './frp.db');
 
     // Real-time traffic tracking
@@ -189,7 +198,7 @@ class FRPServer {
                 remotePort: f.remote_port,
                 localIp: f.local_ip,
                 localPort: f.local_port,
-                proxyType: f.proxy_type,
+                proxyType: normalizeProxyType(f.proxy_type),
                 direction: f.direction,
                 remoteIp: f.remote_ip
               }));
@@ -575,6 +584,16 @@ class FRPServer {
           });
         break;
       }
+      case "udp_packet_response": {
+        this.handleUdpPacketResponse(socket, msg);
+        break;
+      }
+      case "udp_close": {
+        if (msg.connectionId) {
+          this.closeUdpSession(msg.connectionId, false);
+        }
+        break;
+      }
       default:
         console.log("Unknown message type:", msg.type);
     }
@@ -591,14 +610,26 @@ class FRPServer {
 
       for (const forward of portForwards) {
         const direction = forward.direction || 'forward';
+        const proxyType = normalizeProxyType(forward.proxy_type);
         const remote_ip = forward.remote_ip || '127.0.0.1';
         if (direction === 'forward') {
-          await this.createProxyServer(socket, {
-            name: forward.name,
-            remotePort: forward.remote_port,
-            proxyType: forward.proxy_type,
-            portForwardId: forward.id,
-          });
+          if (proxyType === 'udp') {
+            await this.createUdpProxyServer(socket, {
+              name: forward.name,
+              remotePort: forward.remote_port,
+              localIp: forward.local_ip || '127.0.0.1',
+              localPort: forward.local_port,
+              portForwardId: forward.id,
+            });
+            console.log(`UDP proxy [${forward.name}] listening on port ${forward.remote_port}`);
+          } else {
+            await this.createProxyServer(socket, {
+              name: forward.name,
+              remotePort: forward.remote_port,
+              proxyType,
+              portForwardId: forward.id,
+            });
+          }
         } else if (direction === 'dynamic') {
           await this.createProxyServer(socket, {
             name: forward.name,
@@ -659,6 +690,172 @@ class FRPServer {
         reject(err);
       });
     });
+  }
+
+  async createUdpProxyServer(controlSocket, { name, remotePort, localIp, localPort, portForwardId }) {
+    if (this.proxyServers.has(remotePort)) {
+      console.error(`Port ${remotePort} already in use`);
+      return;
+    }
+
+    const udpServer = dgram.createSocket({ type: 'udp4', reuseAddr: true });
+
+    udpServer.on('message', (msg, rinfo) => {
+      if (!controlSocket || controlSocket.destroyed) {
+        return;
+      }
+      const remoteKey = `${portForwardId}:${rinfo.address}:${rinfo.port}`;
+      let connectionId = this.udpRemoteMap.get(remoteKey);
+      let session = connectionId ? this.udpSessions.get(connectionId) : null;
+
+      if (!session) {
+        connectionId = genConnectionId();
+        session = {
+          connectionId,
+          proxyName: name,
+          portForwardId,
+          controlSocket,
+          udpServer,
+          remoteAddress: rinfo.address,
+          remotePort: rinfo.port,
+          targetHost: localIp,
+          targetPort: localPort,
+          remoteKey,
+          timer: null,
+          initialized: false,
+        };
+        this.udpSessions.set(connectionId, session);
+        this.udpRemoteMap.set(remoteKey, connectionId);
+      }
+
+      this.sendUdpPacketToClient(session, msg, !session.initialized);
+      this.refreshUdpSessionTimer(session);
+    });
+
+    udpServer.on('error', (err) => {
+      console.error(`UDP proxy [${name}] error:`, err.message);
+    });
+
+    udpServer.on('close', () => {
+      // Remove associated sessions when socket closes
+      this.cleanupUdpSessionsForPortForward(portForwardId);
+    });
+
+    return new Promise((resolve, reject) => {
+      udpServer.bind(remotePort, () => {
+        this.proxyServers.set(remotePort, {
+          server: udpServer,
+          name,
+          controlSocket,
+          portForwardId,
+          type: 'udp',
+        });
+
+        if (!this.clients.has(controlSocket)) {
+          this.clients.set(controlSocket, []);
+        }
+        this.clients.get(controlSocket).push(remotePort);
+
+        resolve();
+      });
+
+      udpServer.once('error', (err) => {
+        reject(err);
+      });
+    });
+  }
+
+  sendUdpPacketToClient(session, payload, includeTarget) {
+    try {
+      if (!session.controlSocket || session.controlSocket.destroyed) {
+        this.closeUdpSession(session.connectionId, false);
+        return;
+      }
+
+      const message = {
+        type: 'udp_packet',
+        proxyName: session.proxyName,
+        connectionId: session.connectionId,
+        data: payload.toString('base64'),
+      };
+      if (includeTarget) {
+        message.targetHost = session.targetHost;
+        message.targetPort = session.targetPort;
+        session.initialized = true;
+      }
+      session.controlSocket.write(JSON.stringify(message) + '\n');
+    } catch (err) {
+      console.error('Failed to forward UDP packet to client:', err.message);
+    }
+  }
+
+  refreshUdpSessionTimer(session) {
+    if (session.timer) {
+      try { clearTimeout(session.timer); } catch {}
+    }
+    const timeout = this.config.udpSessionTimeoutMs || 60000;
+    session.timer = setTimeout(() => {
+      this.closeUdpSession(session.connectionId, true);
+    }, timeout);
+  }
+
+  cleanupUdpSessionsForPortForward(portForwardId) {
+    for (const [connectionId, session] of this.udpSessions.entries()) {
+      if (session.portForwardId === portForwardId) {
+        this.closeUdpSession(connectionId, false);
+      }
+    }
+  }
+
+  closeUdpSession(connectionId, notifyClient = true) {
+    const session = this.udpSessions.get(connectionId);
+    if (!session) {
+      return;
+    }
+    if (session.timer) {
+      try { clearTimeout(session.timer); } catch {}
+    }
+    this.udpSessions.delete(connectionId);
+    if (session.remoteKey) {
+      this.udpRemoteMap.delete(session.remoteKey);
+    }
+    if (notifyClient && session.controlSocket && !session.controlSocket.destroyed) {
+      try {
+        session.controlSocket.write(JSON.stringify({ type: 'udp_close', connectionId }) + '\n');
+      } catch (err) {
+        console.error('Failed to notify client about UDP close:', err.message);
+      }
+    }
+  }
+
+  handleUdpPacketResponse(socket, msg) {
+    const { connectionId, data } = msg;
+    if (!connectionId || !data) {
+      return;
+    }
+
+    const session = this.udpSessions.get(connectionId);
+    if (!session) {
+      console.error(`udp_packet_response for unknown connection ${connectionId}`);
+      return;
+    }
+
+    if (session.controlSocket !== socket) {
+      console.error(`udp_packet_response from mismatched client for connection ${connectionId}`);
+      return;
+    }
+
+    try {
+      const payload = Buffer.from(data, 'base64');
+      session.udpServer.send(payload, session.remotePort, session.remoteAddress, (err) => {
+        if (err) {
+          console.error(`Failed to send UDP response for connection ${connectionId}:`, err.message);
+        }
+      });
+      this.refreshUdpSessionTimer(session);
+    } catch (err) {
+      console.error('Failed to handle udp_packet_response:', err.message);
+    }
   }
 
   // SOCKS5 handshake + dynamic forward: external client speaks SOCKS to server; server instructs client to connect to target
@@ -860,6 +1057,11 @@ class FRPServer {
           this.pendingConnections.delete(connectionId);
         }
       }
+      for (const [connectionId, session] of this.udpSessions.entries()) {
+        if (session.controlSocket === socket) {
+          this.closeUdpSession(connectionId, false);
+        }
+      }
     }
   }
 
@@ -987,15 +1189,27 @@ class FRPServer {
 
       // Create new proxy servers or reverse configs
       for (const forward of newForwards) {
+        const proxyType = normalizeProxyType(forward.proxy_type);
         if (forward.direction === 'forward') {
           if (!this.proxyServers.has(forward.remote_port)) {
             try {
-              await this.createProxyServer(socket, {
-                name: forward.name,
-                remotePort: forward.remote_port,
-                proxyType: forward.proxy_type,
-                portForwardId: forward.id
-              });
+              if (proxyType === 'udp') {
+                await this.createUdpProxyServer(socket, {
+                  name: forward.name,
+                  remotePort: forward.remote_port,
+                  localIp: forward.local_ip || '127.0.0.1',
+                  localPort: forward.local_port,
+                  portForwardId: forward.id
+                });
+                console.log(`UDP proxy [${forward.name}] listening on port ${forward.remote_port}`);
+              } else {
+                await this.createProxyServer(socket, {
+                  name: forward.name,
+                  remotePort: forward.remote_port,
+                  proxyType,
+                  portForwardId: forward.id
+                });
+              }
             } catch (err) {
               console.error(`Failed to create proxy [${forward.name}]:`, err);
             }
@@ -1025,7 +1239,7 @@ class FRPServer {
         remotePort: f.remote_port,
         localIp: f.local_ip,
         localPort: f.local_port,
-        proxyType: f.proxy_type,
+        proxyType: normalizeProxyType(f.proxy_type),
         direction: f.direction,
         remoteIp: f.remote_ip
       }));

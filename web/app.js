@@ -67,6 +67,12 @@ async function reloadClientPortForwards(clientId) {
   }
 }
 
+const VALID_PROXY_TYPES = new Set(['tcp', 'udp', 'socks5']);
+function normalizeProxyType(type) {
+  const normalized = (type || 'tcp').toString().trim().toLowerCase();
+  return VALID_PROXY_TYPES.has(normalized) ? normalized : 'tcp';
+}
+
 // Middleware
 app.use(morgan('combined'));
 app.use(bodyParser.json());
@@ -251,6 +257,7 @@ app.get('/port-forwards/new', requireAuth, async (req, res) => {
 app.post('/port-forwards/new', requireAuth, async (req, res) => {
   try {
     const { client_id, name, remote_port, local_ip, local_port, proxy_type, direction, remote_ip } = req.body;
+    const normalizedProxyType = normalizeProxyType(proxy_type);
 
     // Check if remote port is available
     const available = await db.isRemotePortAvailable(remote_port);
@@ -264,7 +271,7 @@ app.post('/port-forwards/new', requireAuth, async (req, res) => {
       parseInt(remote_port || 0),
       local_ip || '127.0.0.1',
       parseInt(local_port || 0),
-      proxy_type || 'tcp',
+      normalizedProxyType,
       direction || 'forward',
       remote_ip || '127.0.0.1'
     );
@@ -305,6 +312,7 @@ app.get('/port-forwards/:id/edit', requireAuth, async (req, res) => {
 app.post('/port-forwards/:id/edit', requireAuth, async (req, res) => {
   try {
     const { name, remote_port, local_ip, local_port, proxy_type, enabled, direction, remote_ip } = req.body;
+    const normalizedProxyType = normalizeProxyType(proxy_type);
 
     // Check if remote port is available (excluding current record)
     const available = await db.isRemotePortAvailable(remote_port, req.params.id);
@@ -320,7 +328,7 @@ app.post('/port-forwards/:id/edit', requireAuth, async (req, res) => {
       remote_port: remote_port ? parseInt(remote_port) : 0,
       local_ip: local_ip || '127.0.0.1',
       local_port: local_port ? parseInt(local_port) : 0,
-      proxy_type: proxy_type || 'tcp',
+      proxy_type: normalizedProxyType,
       enabled: enabled ? 1 : 0,
       direction: direction || 'forward',
       remote_ip: remote_ip || '127.0.0.1'
@@ -421,6 +429,7 @@ app.get('/api/port-forwards/:id', requireAuth, async (req, res) => {
 app.post('/api/port-forwards', requireAuth, async (req, res) => {
   try {
     const { client_id, name, remote_port, local_ip, local_port, proxy_type, direction, remote_ip } = req.body;
+    const normalizedProxyType = normalizeProxyType(proxy_type);
 
     const available = await db.isRemotePortAvailable(remote_port);
     if (!available) {
@@ -433,7 +442,7 @@ app.post('/api/port-forwards', requireAuth, async (req, res) => {
       parseInt(remote_port || 0),
       local_ip || '127.0.0.1',
       parseInt(local_port || 0),
-      proxy_type || 'tcp',
+      normalizedProxyType,
       direction || 'forward',
       remote_ip || '127.0.0.1'
     );
@@ -459,7 +468,11 @@ app.put('/api/port-forwards/:id', requireAuth, async (req, res) => {
     // Get the current port forward to get the client_id
     const currentPortForward = await db.getPortForward(req.params.id);
 
-    await db.updatePortForward(req.params.id, req.body);
+    const updatePayload = { ...req.body };
+    if (Object.prototype.hasOwnProperty.call(updatePayload, 'proxy_type')) {
+      updatePayload.proxy_type = normalizeProxyType(updatePayload.proxy_type);
+    }
+    await db.updatePortForward(req.params.id, updatePayload);
     const portForward = await db.getPortForward(req.params.id);
 
     // Trigger dynamic reload for connected client

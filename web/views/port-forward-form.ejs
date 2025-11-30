@@ -55,13 +55,13 @@
           <option value="dynamic" <%= (portForward && portForward.direction === 'dynamic') ? 'selected' : '' %>>Dynamic (SOCKS5 on server)</option>
           <option value="reverse-dynamic" <%= (portForward && portForward.direction === 'reverse-dynamic') ? 'selected' : '' %>>Reverse-Dynamic (SOCKS5 on client)</option>
         </select>
-        <small class="form-help">Forward: server listens on remote_port and connects to client local_ip:local_port. Reverse: client listens on local_port and server connects to remote_ip:remote_port. Dynamic: server runs a SOCKS5 proxy on remote_port. Reverse-Dynamic: client runs a SOCKS5 proxy on local_port.</small>
+        <small class="form-help">Forward: server listens on remote_port (supports TCP or UDP) and connects to client local_ip:local_port. Reverse: client listens on local_port and server connects to remote_ip:remote_port. Dynamic: server runs a SOCKS5 proxy on remote_port. Reverse-Dynamic: client runs a SOCKS5 proxy on local_port.</small>
       </div>
 
       <div class="form-group">
         <label for="remote_port">Remote Port</label>
         <input type="number" id="remote_port" name="remote_port" value="<%= portForward ? portForward.remote_port : '' %>" min="0" max="65535">
-        <small class="form-help">Forward/Dynamic: external port on server (required). Reverse/Reverse-Dynamic: target port (Reverse) or unused (Reverse-Dynamic).</small>
+        <small class="form-help">Forward/Dynamic (TCP or UDP): external port on server (required). Reverse: remote target port. Reverse-Dynamic: unused.</small>
       </div>
 
       <div class="form-group">
@@ -79,16 +79,17 @@
       <div class="form-group">
         <label for="local_port">Local Port</label>
         <input type="number" id="local_port" name="local_port" value="<%= portForward ? portForward.local_port : '' %>" min="0" max="65535">
-        <small class="form-help">Forward: target port on client (required). Reverse: local listener port (required). Dynamic: not used. Reverse-Dynamic: local SOCKS5 port (required).</small>
+        <small class="form-help">Forward (TCP/UDP): target port on client (required). Reverse: local listener port (required). Dynamic: not used. Reverse-Dynamic: local SOCKS5 port (required).</small>
       </div>
 
       <div class="form-group">
         <label for="proxy_type">Proxy Type</label>
         <select id="proxy_type" name="proxy_type">
           <option value="tcp" <%= (!portForward || portForward.proxy_type === 'tcp') ? 'selected' : '' %>>TCP</option>
+          <option value="udp" <%= (portForward && portForward.proxy_type === 'udp') ? 'selected' : '' %>>UDP</option>
           <option value="socks5" <%= (portForward && portForward.proxy_type === 'socks5') ? 'selected' : '' %>>SOCKS5</option>
         </select>
-        <small class="form-help">For dynamic/reverse-dynamic, select SOCKS5.</small>
+        <small class="form-help">TCP is the default. Select UDP for datagram forwards (forward direction only). SOCKS5 is used for dynamic or reverse-dynamic proxies.</small>
       </div>
 
       <% if (portForward) { %>
