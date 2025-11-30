@@ -4,7 +4,8 @@ A Node.js implementation of Fast Reverse Proxy (FRP) for TCP/UDP port forwarding
 
 ## Features
 
-- **TCP port forwarding** - Forward local services through the server to the internet
+- **TCP/UDP port forwarding** - Forward local services through the server to the internet
+- **forwarding/Reverse Forwarding/Dynamic socks5/Reverse Dynamic** - full direction and type support
 - **Client/Server architecture** - Centralized server with multiple client support
 - **Database-backed configuration** - SQLite database for persistent storage
 - **Token-based authentication** - Secure client authentication with auto-generated tokens
